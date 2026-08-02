@@ -4,7 +4,7 @@
 
 - **Repository:** `github.com/pploc/common-go`
 - **Default branch:** `develop`
-- **Target Go version:** Go 1.22
+- **Target Go version:** Go 1.26
 - **Current implementation:** Only `README.md`; no Go module, implementation, tests, or CI
 - **Primary consumers:** `ms-gym-identifier`, `ms-gym-workout`, `ms-gym-checkin`, and `ms-gym-notification`
 
@@ -264,7 +264,7 @@ docs/adr/0003-kafka-wire-contract.md
 
 ## Tasks
 
-1. Initialize `go.mod` with Go 1.22.
+1. Initialize `go.mod` with Go 1.26.
 2. Set the permanent module path.
 3. Add baseline dependencies only:
    - `google.golang.org/grpc`
@@ -1169,7 +1169,7 @@ Do not include these in the initial implementation:
 
 | PR | Scope | Expected outcome |
 |---|---|---|
-| 1 | Module, Go 1.22, CI, Makefile, ADRs | Buildable repository |
+| 1 | Module, Go 1.26, CI, Makefile, ADRs | Buildable repository |
 | 2 | Auth headers, claims, context, tests | Trusted identity context |
 | 3 | Error model and gRPC mapping | Shared error contract |
 | 4 | Logging, recovery, OTel, metrics, policies | `v0.1.0` |
