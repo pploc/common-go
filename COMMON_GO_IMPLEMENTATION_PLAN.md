@@ -5,8 +5,26 @@
 - **Repository:** `github.com/pploc/common-go`
 - **Default branch:** `develop`
 - **Target Go version:** Go 1.26
-- **Current implementation:** Only `README.md`; no Go module, implementation, tests, or CI
+- **Current implementation:** Phase 0 and Phase 1 are implemented. Phase 2 prerequisites are partially complete; the Go Kafka producer is not implemented.
 - **Primary consumers:** `ms-gym-identifier`, `ms-gym-workout`, `ms-gym-checkin`, and `ms-gym-notification`
+
+## Current Progress — 2026-08-02
+
+### Completed
+
+- `common-go` uses module path `github.com/pploc/common-go`, targets Go 1.26, and has Phase 1 auth, error, gRPC interceptor/middleware, logging, and OpenTelemetry packages. Latest implementation commits include `f0ac079 feat: add Go gRPC core` and `1baa3aa test: verify published protobuf fixtures`.
+- `common-java` default Kafka transport is Confluent Schema Registry-framed concrete Protobuf. Its `develop` branch contains `c0c2e20 feat: add Confluent protobuf transport`; the current published build metadata is `1.0.4`.
+- `gym-proto` publishes a controlled generated-stub workflow. `gym-proto v1.0.6` and `github.com/pploc/proto-go v1.0.6` are published and include the versioned Kafka fixture artifact.
+- A clean external module imported `github.com/pploc/proto-go v1.0.6` without a `replace` directive. `common-go` consumes that release in a test-only conformance suite.
+- Confluent Platform and Schema Registry 7.7.1 fixture generation, offline/live frame verification, exact Java serializer framing with `auto.register.schemas=false`, and positive/negative `BACKWARD` checks passed before the disposable local Registry was stopped.
+- The canonical artifact is `gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json`; it defines three concrete `events.v1` identity events, canonical headers, Protobuf payload bytes, message-index bytes, schema IDs, and complete Confluent frames.
+
+### Still Required Before Phase 2 Producer Implementation
+
+1. Java consumer conformance must decode the raw published fixture frames through the production consumer configuration.
+2. Kong must provide executable configuration and proxy-level evidence that it strips spoofed client trusted headers and injects validated claims.
+3. Accountable Go, Java, Protobuf, Schema Registry, and gateway owners must record real approvals. An approval may be a review, issue comment, ADR decision, or release checklist entry; never synthesize it in `manifest.json`.
+4. `gym-proto/contracts/v1/manifest.json` must remain `pending-owner-approval` until all required evidence and approvals exist.
 
 This document is the implementation handoff for building `common-go`. Implement it incrementally. Do not implement later phases before their listed contract decisions and dependencies are resolved.
 
@@ -73,28 +91,35 @@ Required ownership:
 | Kafka transport, headers, retry, DLQ | `common-go` / `common-java` |
 | Domain event construction and handling | Individual services |
 
-Before Kafka implementation, make generated Go stubs importable from a permanent, tagged Go module. Resolve the mismatch between:
+**Resolved:** Generated Go stubs are published from `gym-proto` to the permanent module:
 
-- actual repository: `github.com/pploc/gym-proto`
-- current proto `go_package`: `github.com/gym-chain/proto-go/...`
-- current generated output: `gym-proto/gen/go`
+```text
+github.com/pploc/proto-go v1.0.6
+```
 
-Do not depend on local `replace` directives in a released `common-go` version.
+The generated `go_package` values use `github.com/pploc/proto-go/...`. The release pipeline also publishes the canonical Kafka fixture artifact at:
+
+```text
+github.com/pploc/proto-go/contracts/v1/kafka/confluent-7.7.1-fixtures.json
+```
+
+A clean external module imported the released event stubs and fixture artifact without a local `replace` directive. Released `common-go` versions must retain that constraint.
 
 ### 3.3 Kafka wire format
 
-Resolve this before Phase 2:
-
-- Documentation requires Protobuf events and Confluent Schema Registry in Protobuf mode.
-- `common-java` currently uses a JSON event envelope containing an inline Protobuf-as-JSON payload.
-
-Recommended target contract:
+**Resolved for the producer contract:**
 
 - Kafka key: domain ordering key as bytes/string.
-- Kafka value: Schema Registry-framed concrete Protobuf event.
-- Kafka headers: event metadata and trace correlation.
+- Kafka value: Confluent Schema Registry-framed concrete Protobuf event.
+- Subject strategy: `TopicNameStrategy`, using `<topic>-value`.
+- Schema compatibility: `BACKWARD`.
+- Kafka headers: canonical event metadata and W3C trace correlation.
+- Production clients: `auto.register.schemas=false`.
+- Fixture-only generator: may register schemas in a clean disposable Registry.
 
-If the Java JSON envelope must remain, document JSON as the actual wire format and define exactly how Protobuf schema verification works. Go and Java must use the same contract.
+`common-java` now defaults to this Protobuf transport. Legacy JSON envelope classes are retained only as documented migration adapters and are not the default transport.
+
+The resolved byte-level fixture artifact is `github.com/pploc/proto-go/contracts/v1/kafka/confluent-7.7.1-fixtures.json` at `v1.0.6`. The Go producer remains gated by the outstanding Java consumer, Kong, and owner-approval evidence listed in the current-progress section.
 
 ### 3.4 Authentication trust boundary
 
@@ -111,6 +136,8 @@ Canonical metadata/header names:
 | Correlation ID | `x-trace-id` |
 
 Kong must strip any client-supplied copies before injecting trusted values.
+
+**Status:** The contract declaration exists, but executable Kong configuration and a proxy-level spoofed-header stripping/injection test have not been provided. This remains a Phase 2 release gate.
 
 ### 3.5 Membership propagation
 
@@ -264,34 +291,24 @@ docs/adr/0003-kafka-wire-contract.md
 
 ## Tasks
 
-1. Initialize `go.mod` with Go 1.26.
-2. Set the permanent module path.
-3. Add baseline dependencies only:
-   - `google.golang.org/grpc`
-   - `google.golang.org/protobuf`
-   - OpenTelemetry API/SDK integration required by the chosen design
-4. Add build commands:
-   - format check
-   - `go vet`
-   - `staticcheck`
-   - `go test -race ./...`
-   - coverage
-   - `govulncheck`
-5. Document public API and compatibility policy.
-6. Approve the auth header contract.
-7. Approve the error category and `x-error-code` contract.
-8. Approve the Kafka wire format and schema subject naming.
-9. Make generated Go Protobuf stubs importable from a tagged module.
-10. Correct documentation that runs Buf breaking checks against `main`; this workspace uses `develop` as the default branch.
+1. **Completed:** Initialize `go.mod` with Go 1.26.
+2. **Completed:** Set module path `github.com/pploc/common-go`.
+3. **Completed:** Add baseline gRPC, Protobuf, and OpenTelemetry dependencies.
+4. **Completed:** Add repository validation commands and CI coverage appropriate to the implemented packages.
+5. **Completed:** Document the public API and compatibility policy.
+6. **Contract declared; gateway evidence pending:** Approve the auth header contract and prove Kong stripping/injection.
+7. **Contract defined and tested; owner approval pending:** Define the error category and `x-error-code` contract.
+8. **Contract defined and fixture-validated; owner approval pending:** Define the Kafka wire format, `TopicNameStrategy`, and `BACKWARD` compatibility policy.
+9. **Completed:** Publish generated Go Protobuf stubs as `github.com/pploc/proto-go v1.0.6`.
+10. **Completed:** Use `develop` as the workspace default branch in relevant workflow/docs decisions.
 
 ## Acceptance Criteria
 
-- `go mod tidy` succeeds without local `replace` directives.
-- `go test -race ./...` runs in CI.
-- A clean external sample module can import `common-go`.
-- A clean external sample module can import generated `gym-proto` Go stubs.
-- Go and Java owners approve versioned auth, error, Kafka, and DLQ fixtures.
-- No public API depends on Gin, Viper, Spring concepts, or a concrete Kafka client.
+- **Completed locally:** `go mod tidy` and `go test -race ./...` succeed without local `replace` directives.
+- **Completed:** A clean external sample module imported `github.com/pploc/proto-go v1.0.6` and its fixture artifact without a `replace` directive.
+- **Pending release ownership:** Accountable Go, Java, Protobuf, Schema Registry, and gateway owners must approve their respective contract evidence. This includes auth, error, Kafka, and DLQ fixtures plus the gateway trust boundary.
+- **Completed for Phase 1:** No public API depends on Gin, Viper, Spring concepts, or a concrete Kafka client.
+- A clean external sample module import of `common-go` remains a release check before the first public `common-go` tag.
 
 ## Suggested Release
 
@@ -550,6 +567,26 @@ Never use high-cardinality labels such as user ID, gym ID, trace ID, event ID, K
 ---
 
 # Phase 2 — Kafka Protobuf Producer and Schema Verification
+
+## Status
+
+**Not started.** The Go producer and its `kafka/` package do not exist yet.
+
+### Prerequisite evidence completed
+
+- `gym-proto v1.0.6` and `github.com/pploc/proto-go v1.0.6` are tagged and published.
+- The `gym-proto v1.0.6` release workflow completed successfully: `https://github.com/pploc/gym-proto/actions/runs/30755324195`.
+- The published fixture artifact matches the `gym-proto` source artifact byte-for-byte.
+- `common-go` test `TestPublishedProtoGoConfluentFixtures` decodes all published fixture payloads with released generated event types and validates complete-frame segmentation.
+- The Java producer serializer reproduces the exact frames in a live clean Schema Registry 7.7.1 environment. The fixture verifier and `BACKWARD` positive/negative compatibility checks passed.
+
+### Prerequisite evidence outstanding
+
+- Java production consumer configuration must decode raw fixture frames in a real Kafka/Schema Registry test.
+- Kong configuration plus a proxy-level test must prove stripping/injection of trusted headers.
+- Real named owner approvals must be recorded for Go, Java, Protobuf, Schema Registry, and gateway scopes.
+
+Do not start the Go producer until all outstanding evidence is available and `gym-proto/contracts/v1/manifest.json` can truthfully move out of `pending-owner-approval`.
 
 ## Objective
 
@@ -933,13 +970,19 @@ Do not add generic crypto or direct JWT validation helpers without a concrete ad
 
 ## Location
 
-Prefer a language-neutral, versioned location owned with the API contracts, for example:
+**Implemented:** Canonical fixtures live under the language-neutral, versioned contract owner:
 
 ```text
-gym-proto/contracts/
+gym-proto/contracts/v1/
 ```
 
-Do not let either `common-go` or `common-java` privately define the canonical fixtures.
+The Kafka artifact is published with the matching generated Go module release:
+
+```text
+github.com/pploc/proto-go/contracts/v1/kafka/confluent-7.7.1-fixtures.json
+```
+
+`common-go` consumes the published artifact in `TestPublishedProtoGoConfluentFixtures`; it does not maintain a private byte fixture copy. `common-java` must add equivalent production-consumer conformance before the Phase 2 gate closes.
 
 ## Auth Fixtures
 
@@ -1004,12 +1047,13 @@ For each release candidate, record:
 
 | Component | Version |
 |---|---|
-| `common-go` | candidate version |
-| `common-java` | supported version |
-| `gym-proto` | pinned version |
-| contract fixtures | pinned version |
-| Kafka | production baseline |
-| Schema Registry | production baseline |
+| `common-go` | `develop` at `1baa3aa`; no public module tag yet |
+| `common-java` | `develop` at `c0c2e20`; published build metadata `1.0.4` |
+| `gym-proto` | `v1.0.6` |
+| `github.com/pploc/proto-go` | `v1.0.6` |
+| contract fixtures | `v1.0.6`, `contracts/v1/kafka/confluent-7.7.1-fixtures.json` |
+| Kafka | Confluent Platform 7.7.1 fixture baseline |
+| Schema Registry | Confluent Schema Registry 7.7.1, Protobuf / `BACKWARD` |
 
 A release candidate must pass its local tests and the shared contract fixture suite.
 
