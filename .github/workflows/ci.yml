@@ -63,6 +63,8 @@ jobs:
       KAFKA_BROKERS: localhost:9092
       SCHEMA_REGISTRY_URL: http://localhost:8081
       PROTO_VERSION: v1.1.0
+      GYM_PROTO_SHA: 740e476915117ab594a6e7ee3677e6a2c39c3c80
+      GYM_PROTO_FIXTURE_SHA256: e5a5d0944229c9e0c97dc5e872f01e7597993e5732f2014b7d8e5efdf965a27e
     steps:
       - uses: actions/checkout@v4
         with:
@@ -93,9 +95,11 @@ jobs:
         run: |
           set -euo pipefail
           proto_module="$(go list -m -json github.com/pploc/proto-go)"
-          test "$(jq -r '.Version' <<<"$proto_module")" = "${PROTO_VERSION#v}"
+          test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_VERSION"
           test -z "$(jq -r '.Replace // empty' <<<"$proto_module")"
-          test "$(git -C ../gym-proto describe --exact-match --tags HEAD)" = "$PROTO_VERSION"
+          test "$(git -C ../gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
+          test "$(git -C ../gym-proto rev-parse "${PROTO_VERSION}^{commit}")" = "$GYM_PROTO_SHA"
+          test "$(sha256sum ../gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$GYM_PROTO_FIXTURE_SHA256"
 
       - name: Wait for Schema Registry
         shell: bash
@@ -146,10 +150,12 @@ jobs:
           git -C ../gym-proto rev-parse HEAD > evidence/gym-proto-source-sha.txt
           go list -m -json github.com/pploc/proto-go > evidence/proto-go-module.json
           sha256sum "$(go list -m -f '{{.Dir}}' github.com/pploc/proto-go)/contracts/v1/kafka/confluent-7.7.1-fixtures.json" > evidence/fixture.sha256
-          curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/schema-registry-subjects.json
-          jq -r '.[]' evidence/schema-registry-subjects.json | while read -r subject; do
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -S . > "evidence/${subject}.compatibility.json"
-          done
+          curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/schema-registry-subjects.json || true
+          if [[ -f evidence/schema-registry-subjects.json ]]; then
+            jq -r '.[]' evidence/schema-registry-subjects.json | while read -r subject; do
+              curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -S . > "evidence/${subject}.compatibility.json" || true
+            done
+          fi
 
       - name: Upload contract evidence
         if: always()
