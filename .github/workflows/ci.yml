@@ -34,11 +34,6 @@ jobs:
     services:
       kafka:
         image: confluentinc/cp-kafka:7.7.1
-        options: >-
-          --health-cmd "kafka-topics --bootstrap-server localhost:29092 --list"
-          --health-interval 5s
-          --health-timeout 10s
-          --health-retries 30
         ports:
           - 9092:9092
         env:
@@ -58,11 +53,6 @@ jobs:
           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
       schema-registry:
         image: confluentinc/cp-schema-registry:7.7.1
-        options: >-
-          --health-cmd "curl --fail --silent http://localhost:8081/subjects"
-          --health-interval 5s
-          --health-timeout 10s
-          --health-retries 30
         ports:
           - 8081:8081
         env:
@@ -111,15 +101,18 @@ jobs:
           test "$(git -C ../gym-proto rev-parse "${PROTO_VERSION}^{commit}")" = "$GYM_PROTO_SHA"
           test "$(sha256sum ../gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$GYM_PROTO_FIXTURE_SHA256"
 
-      - name: Wait for Schema Registry
+      - name: Wait for Kafka and Schema Registry
         shell: bash
         run: |
           set -euo pipefail
-          for attempt in {1..60}; do
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" >/dev/null && exit 0
+          for attempt in {1..90}; do
+            if curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" >/dev/null \
+              && bash -c '</dev/tcp/127.0.0.1/9092'; then
+              exit 0
+            fi
             sleep 2
           done
-          echo "Schema Registry did not become ready" >&2
+          echo "Kafka and Schema Registry did not become ready" >&2
           exit 1
 
       - name: Seed and verify immutable Confluent fixtures
