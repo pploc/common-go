@@ -1,0 +1,48 @@
+name: Validate Release Candidate
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+      - name: Validate immutable tag version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF#refs/tags/v}"
+          test -n "$version"
+          test "$(git tag --points-at HEAD | grep -Fx "v$version")" = "v$version"
+          test -z "$(go list -m -json | jq -r '.Replace // empty')"
+      - name: Install analysis tools
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+      - name: Verify source and integration contract
+        run: |
+          make verify
+          make integration
+      - name: Create provenance report
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          go list -m -json all > evidence/dependencies.json
+          git rev-parse HEAD > evidence/source-sha.txt
+          sha256sum go.mod go.sum > evidence/module.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: common-go-release-evidence-${{ github.sha }}
+          path: evidence/

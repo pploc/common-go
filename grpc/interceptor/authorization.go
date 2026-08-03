@@ -13,7 +13,7 @@ import (
 func AuthorizationUnary(policy middleware.Policy) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		if policy == nil {
-			return handler(ctx, req)
+			return nil, authorizationRequired()
 		}
 		claims, ok := auth.FromContext(ctx)
 		if !ok {
@@ -30,7 +30,7 @@ func AuthorizationUnary(policy middleware.Policy) grpc.UnaryServerInterceptor {
 func AuthorizationStream(policy middleware.Policy) grpc.StreamServerInterceptor {
 	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if policy == nil {
-			return handler(srv, stream)
+			return authorizationRequired()
 		}
 		claims, ok := auth.FromContext(stream.Context())
 		if !ok {

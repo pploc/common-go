@@ -19,9 +19,13 @@ type confluentFixtureDocument struct {
 }
 
 type confluentFixtureCase struct {
-	Name       string `json:"name"`
-	EventType  string `json:"eventType"`
-	PayloadHex string `json:"payloadHex"`
+	Name       string            `json:"name"`
+	Topic      string            `json:"topic"`
+	KeyUTF8    string            `json:"keyUtf8"`
+	Subject    string            `json:"subject"`
+	EventType  string            `json:"eventType"`
+	Headers    map[string]string `json:"headers"`
+	PayloadHex string            `json:"payloadHex"`
 	Frame      struct {
 		MagicByteHex      string `json:"magicByteHex"`
 		SchemaIDBigEndian string `json:"schemaIdBigEndianHex"`
@@ -31,16 +35,8 @@ type confluentFixtureCase struct {
 }
 
 func TestPublishedProtoGoConfluentFixtures(t *testing.T) {
-	fixturePath := filepath.Join(publishedProtoGoDir(t), "contracts", "v1", "kafka", "confluent-7.7.1-fixtures.json")
-	contents, err := os.ReadFile(fixturePath)
-	if err != nil {
-		t.Fatalf("read published fixture artifact: %v", err)
-	}
+	document := publishedConfluentFixtures(t)
 
-	var document confluentFixtureDocument
-	if err := json.Unmarshal(contents, &document); err != nil {
-		t.Fatalf("decode published fixture artifact: %v", err)
-	}
 	if document.FixtureFormatVersion != 1 {
 		t.Fatalf("fixture format version = %d, want 1", document.FixtureFormatVersion)
 	}
@@ -101,6 +97,20 @@ func TestPublishedProtoGoConfluentFixtures(t *testing.T) {
 	}
 }
 
+func publishedConfluentFixtures(t *testing.T) confluentFixtureDocument {
+	t.Helper()
+	fixturePath := filepath.Join(publishedProtoGoDir(t), "contracts", "v1", "kafka", "confluent-7.7.1-fixtures.json")
+	contents, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read published fixture artifact: %v", err)
+	}
+	var document confluentFixtureDocument
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatalf("decode published fixture artifact: %v", err)
+	}
+	return document
+}
+
 func publishedProtoGoDir(t *testing.T) string {
 	t.Helper()
 	output, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/pploc/proto-go").Output()
@@ -123,6 +133,18 @@ func fixtureMessage(t *testing.T, eventType string) proto.Message {
 		return &eventsv1.UserSuspendedEvent{}
 	case "events.v1.UserRoleChangedEvent":
 		return &eventsv1.UserRoleChangedEvent{}
+	case "events.v1.PaymentCompletedEvent":
+		return &eventsv1.PaymentCompletedEvent{}
+	case "events.v1.MembershipActivatedEvent":
+		return &eventsv1.MembershipActivatedEvent{}
+	case "events.v1.MembershipPausedEvent":
+		return &eventsv1.MembershipPausedEvent{}
+	case "events.v1.MembershipResumedEvent":
+		return &eventsv1.MembershipResumedEvent{}
+	case "events.v1.MembershipExpiringSoonEvent":
+		return &eventsv1.MembershipExpiringSoonEvent{}
+	case "events.v1.MembershipExpiredEvent":
+		return &eventsv1.MembershipExpiredEvent{}
 	default:
 		t.Fatalf("unsupported fixture event type %q", eventType)
 		return nil

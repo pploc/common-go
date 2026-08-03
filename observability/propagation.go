@@ -3,6 +3,7 @@ package observability
 
 import (
 	"context"
+	"strings"
 
 	"github.com/pploc/common-go/auth"
 	"go.opentelemetry.io/otel"
@@ -23,18 +24,26 @@ func ExtractIncoming(ctx context.Context) context.Context {
 	}
 	carrier := propagation.HeaderCarrier{}
 	for _, key := range []string{"traceparent", "tracestate"} {
-		if values := md.Get(key); len(values) > 0 {
+		values := md.Get(key)
+		if len(values) == 1 && strings.TrimSpace(values[0]) != "" {
 			carrier.Set(key, values[0])
 		}
 	}
 	ctx = otel.GetTextMapPropagator().Extract(ctx, carrier)
-	if trace.SpanContextFromContext(ctx).IsValid() {
+	if _, ok := ValidSpanContext(ctx); ok {
 		return ctx
 	}
-	if values := md.Get(auth.HeaderTraceID); len(values) == 1 && values[0] != "" {
-		return context.WithValue(ctx, correlationContextKey{}, values[0])
+	if values := md.Get(auth.HeaderTraceID); len(values) == 1 && strings.TrimSpace(values[0]) != "" {
+		return context.WithValue(ctx, correlationContextKey{}, strings.TrimSpace(values[0]))
 	}
 	return ctx
+}
+
+// ValidSpanContext returns only a valid W3C-derived span context. It is useful
+// for callers that must distinguish trace propagation from fallback correlation.
+func ValidSpanContext(ctx context.Context) (trace.SpanContext, bool) {
+	spanContext := trace.SpanContextFromContext(ctx)
+	return spanContext, spanContext.IsValid()
 }
 
 // CorrelationID returns the compatibility trace identifier only when no valid

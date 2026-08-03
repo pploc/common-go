@@ -12,11 +12,7 @@ func WithClaims(logger *slog.Logger, claims auth.Claims) *slog.Logger {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	attrs := []any{"role", string(claims.Role)}
-	if claims.GymID != "" {
-		attrs = append(attrs, "gym_id", claims.GymID)
-	}
-	return logger.With(attrs...)
+	return logger.With("role", string(claims.Role))
 }
 
 // WithCorrelation derives a logger with a compatibility correlation ID. Use it

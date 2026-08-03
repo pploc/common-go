@@ -8,6 +8,7 @@ import (
 
 	"github.com/pploc/common-go/auth"
 	commonerrors "github.com/pploc/common-go/errors"
+	"github.com/pploc/common-go/grpc/middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -59,7 +60,11 @@ var testServiceDesc = grpc.ServiceDesc{
 func TestServerOptionsBufconnAuthAndTrailer(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := &testServer{claims: make(chan auth.Claims, 1)}
-	grpcServer := grpc.NewServer(ServerOptions(AuthOptions{Claims: auth.DefaultOptions()}, nil, nil)...)
+	policy, err := middleware.NewRegistry(middleware.MethodRule{Method: testMethod, Kind: middleware.MethodAuthenticated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcServer := grpc.NewServer(ServerOptions(AuthOptions{Claims: auth.DefaultOptions()}, policy, nil)...)
 	grpcServer.RegisterService(&testServiceDesc, server)
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(grpcServer.Stop)

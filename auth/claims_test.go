@@ -32,13 +32,16 @@ func TestParseHTTPRejectsConflictingDuplicate(t *testing.T) {
 	}
 }
 
-func TestValidateRequirementsAndUnknowns(t *testing.T) {
+func TestValidateRequirementsAndKnownMemberships(t *testing.T) {
 	if _, err := (Claims{UserID: "one", Role: "future"}).Validate(DefaultOptions()); err == nil {
 		t.Fatal("expected unknown role failure")
 	}
-	claims, err := (Claims{UserID: "one", Role: "future"}).Validate(Options{RequireUserID: true, RequireRole: true, AllowUnknownRole: true})
-	if err != nil || claims.Role != "FUTURE" {
-		t.Fatalf("unexpected result: %#v, %v", claims, err)
+	if _, err := (Claims{UserID: "one", Role: RoleAdmin, Membership: "future"}).Validate(DefaultOptions()); err == nil {
+		t.Fatal("expected unknown membership failure")
+	}
+	claims, err := (Claims{UserID: "one", Role: "customer", Membership: "none"}).Validate(DefaultOptions())
+	if err != nil || claims.Role != RoleCustomer || claims.Membership != MembershipNone {
+		t.Fatalf("unexpected normalized claims: %#v, %v", claims, err)
 	}
 	if _, err := (Claims{UserID: "one", Role: RoleAdmin}).Validate(Options{RequireUserID: true, RequireRole: true, RequireMembership: true}); err == nil {
 		t.Fatal("expected missing membership failure")

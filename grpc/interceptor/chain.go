@@ -20,20 +20,20 @@ func ServerOptions(authOptions AuthOptions, policy middleware.Policy, metrics *o
 		grpc.ChainUnaryInterceptor(
 			RecoveryUnary(metrics),
 			PropagationUnary(),
-			LoggingUnary(),
 			MetricsUnary(metrics),
 			ErrorUnary(),
 			AuthUnary(authOptions),
 			AuthorizationUnary(policy),
+			LoggingUnary(),
 		),
 		grpc.ChainStreamInterceptor(
 			RecoveryStream(metrics),
 			PropagationStream(),
-			LoggingStream(),
 			MetricsStream(metrics),
 			ErrorStream(),
 			AuthStream(authOptions),
 			AuthorizationStream(policy),
+			LoggingStream(),
 		),
 	}
 }

@@ -19,6 +19,7 @@ const (
 type MembershipStatus string
 
 const (
+	MembershipNone    MembershipStatus = "NONE"
 	MembershipActive  MembershipStatus = "ACTIVE"
 	MembershipPaused  MembershipStatus = "PAUSED"
 	MembershipExpired MembershipStatus = "EXPIRED"
@@ -34,15 +35,14 @@ type Claims struct {
 	TraceID    string
 }
 
-// Options controls which injected claims are required and whether unknown values
-// are accepted for forward compatibility.
+// Options controls which trusted claims are required. Known role and membership
+// values always fail closed so a gateway or service upgrade cannot silently widen
+// authorization.
 type Options struct {
-	RequireUserID          bool
-	RequireRole            bool
-	RequireGymID           bool
-	RequireMembership      bool
-	AllowUnknownRole       bool
-	AllowUnknownMembership bool
+	RequireUserID     bool
+	RequireRole       bool
+	RequireGymID      bool
+	RequireMembership bool
 }
 
 // DefaultOptions requires the claims needed for an authenticated request.
@@ -70,10 +70,10 @@ func (c Claims) Validate(options Options) (Claims, error) {
 	if options.RequireMembership && c.Membership == "" {
 		return Claims{}, fmt.Errorf("auth: %s is required", HeaderMembershipStatus)
 	}
-	if c.Role != "" && !isKnownRole(c.Role) && !options.AllowUnknownRole {
+	if c.Role != "" && !isKnownRole(c.Role) {
 		return Claims{}, fmt.Errorf("auth: unsupported role %q", c.Role)
 	}
-	if c.Membership != "" && !isKnownMembership(c.Membership) && !options.AllowUnknownMembership {
+	if c.Membership != "" && !isKnownMembership(c.Membership) {
 		return Claims{}, fmt.Errorf("auth: unsupported membership status %q", c.Membership)
 	}
 	return c, nil
@@ -90,7 +90,7 @@ func isKnownRole(role Role) bool {
 
 func isKnownMembership(status MembershipStatus) bool {
 	switch status {
-	case MembershipActive, MembershipPaused, MembershipExpired:
+	case MembershipNone, MembershipActive, MembershipPaused, MembershipExpired:
 		return true
 	default:
 		return false

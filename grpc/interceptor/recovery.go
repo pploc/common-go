@@ -9,6 +9,7 @@ import (
 	"github.com/pploc/common-go/logging"
 	"github.com/pploc/common-go/observability"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 // RecoveryUnary turns handler panics into safe internal gRPC failures.
@@ -34,6 +35,8 @@ func recoverPanic(ctx context.Context, method string, metrics *observability.Met
 			metrics.RecordPanic(ctx, method)
 		}
 		logging.FromContext(ctx).Error("grpc handler panic", slog.String("method", method), slog.String("panic_type", fmt.Sprintf("%T", value)))
-		*err = commonerrors.ToGRPC(commonerrors.New(commonerrors.CategoryInternal, "INTERNAL", commonerrors.InternalDescription)).Err
+		mapped := commonerrors.ToGRPC(commonerrors.New(commonerrors.CategoryInternal, "INTERNAL", commonerrors.InternalDescription))
+		_ = grpc.SetTrailer(ctx, metadata.Pairs(commonerrors.TrailerErrorCode, mapped.Code))
+		*err = mapped.Err
 	}
 }
