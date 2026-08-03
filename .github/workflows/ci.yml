@@ -89,6 +89,9 @@ jobs:
           distribution: temurin
           java-version: "26"
 
+      - name: Set up Buf for immutable fixture seeding
+        uses: bufbuild/buf-setup-action@v1
+
       - name: Verify immutable protobuf input
         working-directory: common-go
         shell: bash
@@ -121,6 +124,8 @@ jobs:
         run: |
           set -euo pipefail
           cp contracts/v1/kafka/confluent-7.7.1-fixtures.json /tmp/committed-fixtures.json
+          sed -i 's/\r$//' gradlew scripts/verify-generated-routes.sh
+          buf generate
           ./gradlew generateConfluentFixtures -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
           python3 - <<'PY'
           import json
@@ -136,6 +141,17 @@ jobs:
           test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 9
           jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
             test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -r '.compatibilityLevel')" = BACKWARD
+          done
+
+      - name: Create immutable fixture topics
+        shell: bash
+        run: |
+          set -euo pipefail
+          kafka_container="$(docker ps --filter 'label=com.github.actions.service=kafka' --format '{{.ID}}')"
+          test -n "$kafka_container"
+          jq -r '.cases[].topic' gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
+            docker exec "$kafka_container" kafka-topics --bootstrap-server kafka:29092 \
+              --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor 1
           done
 
       - name: Run real Kafka and Schema Registry contract tests
