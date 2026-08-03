@@ -21,18 +21,40 @@ strip client-provided copies of the following headers and inject trusted values:
 | Role | `x-user-role` |
 | Gym ID | `x-gym-id` |
 | Membership status | `x-membership-status` |
-| Correlation ID | `x-trace-id` |
+| Compatibility correlation ID | `x-trace-id` |
 
-`common-go` and `common-java` extract these claims; they do not normally
-revalidate JWT signatures. A feature that requires membership must reject a
-missing or malformed membership status. Missing claims never grant access.
+Canonical user roles are `CUSTOMER`, `TRAINER`, `ADMIN`, and `SUPER_ADMIN`.
+Public registration creates only `CUSTOMER`; elevated roles require protected
+administration or controlled out-of-band provisioning. Workload identities are
+never represented in `x-user-role`.
+
+Canonical membership statuses are `NONE`, `ACTIVE`, `PAUSED`, and `EXPIRED`.
+New customers and non-customer roles use `NONE`. Ordinary authenticated methods
+accept any known status, while membership-gated methods require `ACTIVE` and
+fail closed on a missing, blank, malformed, conflicting, or unknown status.
+
+`common-go` and `common-java` trim and normalize these values and reject
+conflicting duplicates; they do not normally revalidate JWT signatures. Missing
+claims never grant access. Claims are trusted only after the request has passed
+through the authenticated Kong boundary or a separately verified workload
+channel.
+
+### Workload identity
+
+Identifier-to-Member calls use mTLS. The certificate identity/SAN identifies
+`ms-gym-identifier`, Member authorizes that verified peer, and NetworkPolicy
+permits only intended callers on native gRPC port `50051`. Metadata such as
+`x-service-id`, if retained for observability, never establishes trust unless it
+is bound to the verified peer. The internal workload identity is not a user role
+and cannot be injected by a public client.
 
 ### Tracing
 
 `traceparent` is the canonical trace header and `tracestate` is optional. When
 a valid W3C context is present, it is authoritative. `x-trace-id` is retained
 only for correlation compatibility: it is used when no valid W3C context is
-present and must not overwrite an extracted W3C trace ID.
+present, must not overwrite an extracted W3C trace ID, and never fabricates an
+OpenTelemetry parent.
 
 ### gRPC errors
 

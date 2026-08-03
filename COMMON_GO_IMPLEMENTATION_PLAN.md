@@ -117,7 +117,7 @@ A clean external module imported the released event stubs and fixture artifact w
 - Production clients: `auto.register.schemas=false`.
 - Fixture-only generator: may register schemas in a clean disposable Registry.
 
-`common-java` now defaults to this Protobuf transport. Legacy JSON envelope classes are retained only as documented migration adapters and are not the default transport.
+`common-java` now defaults to this Protobuf transport. Kafka is greenfield, so legacy JSON envelope classes are removed rather than retained as migration adapters.
 
 The resolved byte-level fixture artifact is `github.com/pploc/proto-go/contracts/v1/kafka/confluent-7.7.1-fixtures.json` at `v1.0.6`. The Go producer remains gated by the outstanding Java consumer, Kong, and owner-approval evidence listed in the current-progress section.
 
