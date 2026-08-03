@@ -1,59 +1,26 @@
 # common-go
 
-Shared Go contracts and utilities for the Gym microservices.
+Shared Go foundations for Gym microservices.
 
 ## Status
 
-Phase 1 provides trusted-claim extraction, client-safe domain errors, gRPC
-interceptors, structured logging helpers, and opt-in OpenTelemetry propagation
-and metrics. Kafka, health, pagination, and test utilities remain out of scope.
+`develop` is an unreleased G2 source line; no `common-go` release tag exists. It pins the published `github.com/pploc/proto-go v1.1.0` contract without a `replace` directive.
 
-## Compatibility policy
+## Packages
 
-- Module path: `github.com/pploc/common-go`.
-- Minimum supported Go version: 1.26.
-- Releases follow semantic versioning. A breaking public API change requires a
-  new Go module major version (`/v2`, `/v3`, and so on).
-- Released versions do not contain `replace` directives.
-- Generated domain Protobuf code is owned and released by `gym-proto` through
-  the tagged `github.com/pploc/proto-go` module. This module does not copy
-  generated domain stubs.
-- Canonical compatibility fixtures are versioned with `gym-proto` under
-  `contracts/v1` and must pass in both common libraries before a contract
-  change is released.
+- `auth`, `errors`, `grpc/interceptor`, `grpc/middleware`, `logging`, and `observability` provide trusted-claim extraction, safe error mapping, gRPC policies, logging, and W3C propagation.
+- `kafka` provides acknowledged concrete-Protobuf publishing and a private `franz-go` adapter behind project-owned interfaces.
 
-## Contracts
+## Kafka transport
 
-- [Module path and compatibility](docs/adr/0001-module-path.md)
-- [Authentication, tracing, and gRPC errors](docs/adr/0002-auth-and-tracing-contract.md)
-- [Kafka wire format, retries, and DLQ](docs/adr/0003-kafka-wire-contract.md)
+- Uses Confluent Schema Registry framing with `TopicNameStrategy` and runtime lookup-only schema resolution.
+- Disables consumer auto-commit and processes raw broker records through `FranzConsumer.Run` and `Delivery.Process`.
+- Retries after 2s, 4s, and 8s. Successful handling or confirmed raw DLQ publishing commits the source record; a failed DLQ write, cancellation, or unfinished delivery leaves it eligible for redelivery.
+- `{topic}.DLQ` preserves the original key, framed value, and ordered headers, adding only contract diagnostic headers.
 
-Applications own configuration loading. The shared module does not introduce
-Gin, Viper, Spring concepts, concrete Kafka client types in public APIs, JWT
-signature validation, or default event-payload logging.
-
-## Phase 1 packages
-
-- `auth`: validates gateway-injected trusted headers and stores typed claims in contexts.
-- `errors`: maps categorized domain failures to client-safe gRPC statuses and `x-error-code` trailers.
-- `grpc/interceptor` and `grpc/middleware`: compose recovery, error conversion, logging, metrics, authentication, and explicit authorization policies.
-- `logging`: derives safe `log/slog` loggers without payloads, tokens, user IDs, or error details.
-- `observability`: installs `otelgrpc` server instrumentation and exposes W3C propagation plus bounded metrics.
-
-Use `interceptor.ServerOptions` when constructing a gRPC server. It installs the
-recommended order: recovery, error conversion, logging, metrics,
-authentication, and authorization, plus the official `otelgrpc` stats handler.
-
-Kong remains responsible for validating JWTs and stripping client-provided
-trusted headers before injecting claims. This library implements fail-closed
-extraction only; it does not establish that production trust boundary. Do not
-tag a Phase 1 release until the gateway evidence, owner approvals, cross-language
-fixture runs, and external tagged-module smoke test are recorded in the contract
-manifest.
+This transport is at-least-once. Services own idempotency and transactional outboxes.
 
 ## Verification
-
-Install the pinned analysis tools, then run:
 
 ```bash
 go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
@@ -61,6 +28,8 @@ go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 make verify
 ```
 
-`make verify` runs formatting, vet, static analysis, race tests, coverage,
-module-tidiness, and vulnerability checks. CI runs the same target on pushes
-and pull requests to `develop`.
+For Kafka/Registry validation, use the reusable repository workflow. It provisions Confluent Kafka and Schema Registry 7.7.1, verifies the immutable `gym-proto v1.1.0` fixture input, and runs:
+
+```bash
+KAFKA_BROKERS=localhost:9092 SCHEMA_REGISTRY_URL=http://localhost:8081 make integration
+```

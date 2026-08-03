@@ -6,13 +6,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	internalkafka "github.com/pploc/common-go/internal/kafka"
 	commonkafka "github.com/pploc/common-go/kafka"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,7 +70,110 @@ func TestGivenSeededConfluentRegistry_WhenDecodingPublishedFixtures_ThenResolves
 	}
 }
 
-func TestGivenSeededKafkaAndRegistry_WhenPublishingWithFranz_ThenConsumesDecodedFramedRecord(t *testing.T) {
+func TestGivenSeededKafkaAndRegistry_WhenPublishingWithFranz_ThenConsumesEveryDecodedFramedRecord(t *testing.T) {
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+
+	for _, fixture := range publishedConfluentFixtures(t).Cases {
+		fixture := fixture
+		t.Run(fixture.Name, func(t *testing.T) {
+			// Given
+			message := fixtureMessage(t, fixture.EventType)
+			payload, err := hex.DecodeString(fixture.PayloadHex)
+			if err != nil {
+				t.Fatalf("decode fixture payload: %v", err)
+			}
+			if err := proto.Unmarshal(payload, message); err != nil {
+				t.Fatalf("decode fixture message: %v", err)
+			}
+			producer, err := commonkafka.NewFranzProducer(commonkafka.TransportConfig{Brokers: strings.Split(brokers, ","), PublishTimeout: integrationTimeout}, registry)
+			if err != nil {
+				t.Fatalf("create Franz producer: %v", err)
+			}
+			t.Cleanup(producer.Close)
+			group := fmt.Sprintf("common-go-contract-%d", time.Now().UnixNano())
+			testKey := []byte(group)
+			consumer, err := commonkafka.NewFranzConsumer(commonkafka.TransportConfig{Brokers: strings.Split(brokers, ","), Topics: []string{fixture.Topic}, ConsumerGroup: group, PublishTimeout: integrationTimeout}, registry, producer, nil)
+			if err != nil {
+				t.Fatalf("create Franz consumer: %v", err)
+			}
+			t.Cleanup(consumer.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+			defer cancel()
+			received := make(chan commonkafka.DecodedRecord, 1)
+			deliveryComplete := make(chan struct{})
+			barrierStarted := make(chan struct{}, 1)
+			barrierKey := []byte(group + "-commit-barrier")
+			runResult := make(chan error, 1)
+			go func() {
+				runResult <- consumer.Run(ctx, func(handlerContext context.Context, record commonkafka.DecodedRecord) error {
+					switch {
+					case bytes.Equal(record.Key, testKey):
+						received <- record
+						<-deliveryComplete
+						return nil
+					case bytes.Equal(record.Key, barrierKey):
+						select {
+						case barrierStarted <- struct{}{}:
+						default:
+						}
+						return nil
+					default:
+						return nil
+					}
+				})
+			}()
+
+			// When
+			if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: testKey, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+				t.Fatalf("acknowledged Franz publish: %v", err)
+			}
+			var record commonkafka.DecodedRecord
+			select {
+			case record = <-received:
+			case <-ctx.Done():
+				t.Fatalf("consume published record: %v", ctx.Err())
+			}
+			close(deliveryComplete)
+			if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: barrierKey, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+				t.Fatalf("publish commit barrier: %v", err)
+			}
+			select {
+			case <-barrierStarted:
+			case <-ctx.Done():
+				t.Fatalf("confirm target completion before cancellation: %v", ctx.Err())
+			}
+			time.Sleep(100 * time.Millisecond) // ponytail: bounded wait for the preceding synchronous broker commit; replace with exposed commit hook if production adds one.
+			cancel()
+			if err := <-runResult; err != nil && err != context.Canceled && err != context.DeadlineExceeded {
+				t.Fatalf("stop Franz consumer after delivery: %v", err)
+			}
+
+			// Then
+			if !bytes.Equal(record.Key, testKey) || !proto.Equal(record.Message, message) {
+				t.Fatal("consumed record differs from the published fixture message")
+			}
+			if eventType, ok := integrationHeader(record.Headers, commonkafka.HeaderEventType); !ok || eventType != fixture.EventType {
+				t.Fatalf("event-type = %q, want %q", eventType, fixture.EventType)
+			}
+			if source, ok := integrationHeader(record.Headers, commonkafka.HeaderSource); !ok || source != fixture.Headers[commonkafka.HeaderSource] {
+				t.Fatalf("source = %q, want %q", source, fixture.Headers[commonkafka.HeaderSource])
+			}
+			if eventID, ok := integrationHeader(record.Headers, commonkafka.HeaderEventID); !ok || eventID != fixture.Headers[commonkafka.HeaderEventID] {
+				t.Fatalf("event ID = %q, want %q", eventID, fixture.Headers[commonkafka.HeaderEventID])
+			}
+			frame, err := registry.Encode(fixture.Topic, message)
+			if err != nil {
+				t.Fatalf("re-encode published message: %v", err)
+			}
+			if !bytes.Equal(record.Value, frame) {
+				t.Fatal("consumed raw frame differs from Schema Registry frame")
+			}
+		})
+	}
+}
+
+func TestGivenRetryableHandler_WhenFranzConsumesLiveRecord_ThenCommitsOnlyAfterSuccess(t *testing.T) {
 	// Given
 	brokers, registryURL := integrationEndpoints(t)
 	registry := newIntegrationRegistry(t, registryURL)
@@ -80,93 +186,243 @@ func TestGivenSeededKafkaAndRegistry_WhenPublishingWithFranz_ThenConsumesDecoded
 	if err := proto.Unmarshal(payload, message); err != nil {
 		t.Fatalf("decode fixture message: %v", err)
 	}
-
-	producer, err := commonkafka.NewFranzProducer(commonkafka.TransportConfig{
-		Brokers:        strings.Split(brokers, ","),
-		PublishTimeout: integrationTimeout,
-	}, registry)
+	config := commonkafka.TransportConfig{Brokers: strings.Split(brokers, ","), Topics: []string{fixture.Topic}, PublishTimeout: integrationTimeout}
+	producer, err := commonkafka.NewFranzProducer(config, registry)
 	if err != nil {
 		t.Fatalf("create Franz producer: %v", err)
 	}
 	t.Cleanup(producer.Close)
-
-	group := fmt.Sprintf("common-go-contract-%d", time.Now().UnixNano())
-	testKey := []byte(group)
-	consumer, err := commonkafka.NewFranzConsumer(commonkafka.TransportConfig{
-		Brokers:        strings.Split(brokers, ","),
-		Topics:         []string{fixture.Topic},
-		ConsumerGroup:  group,
-		PublishTimeout: integrationTimeout,
-	}, registry, producer, nil)
+	group := fmt.Sprintf("common-go-retry-%d", time.Now().UnixNano())
+	key := []byte(group)
+	barrierKey := []byte(group + "-barrier")
+	consumerConfig := config
+	consumerConfig.ConsumerGroup = group
+	consumer, err := commonkafka.NewFranzConsumer(consumerConfig, registry, producer, noWaitSleeper{})
 	if err != nil {
 		t.Fatalf("create Franz consumer: %v", err)
 	}
 	t.Cleanup(consumer.Close)
-
 	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
 	defer cancel()
-	received := make(chan commonkafka.DecodedRecord, 1)
-	deliveryComplete := make(chan struct{})
+	var attempts atomic.Int32
+	barrierStarted := make(chan struct{}, 1)
 	runResult := make(chan error, 1)
 	go func() {
-		runResult <- consumer.Run(ctx, func(_ context.Context, record commonkafka.DecodedRecord) error {
-			if !bytes.Equal(record.Key, testKey) {
+		runResult <- consumer.Run(ctx, func(handlerContext context.Context, record commonkafka.DecodedRecord) error {
+			switch {
+			case bytes.Equal(record.Key, key):
+				if attempts.Add(1) < 4 {
+					return errors.New("transient")
+				}
+				return nil
+			case bytes.Equal(record.Key, barrierKey):
+				select {
+				case barrierStarted <- struct{}{}:
+				default:
+				}
+				<-handlerContext.Done()
+				return handlerContext.Err()
+			default:
 				return nil
 			}
-			received <- record
-			<-deliveryComplete
+		})
+	}()
+
+	// When
+	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: key, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+		t.Fatalf("publish retry target: %v", err)
+	}
+	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: barrierKey, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+		t.Fatalf("publish barrier: %v", err)
+	}
+	select {
+	case <-barrierStarted:
+	case <-ctx.Done():
+		t.Fatalf("wait for barrier after successful retry: %v", ctx.Err())
+	}
+	cancel()
+	consumer.Close()
+
+	// Then
+	if attempts.Load() != 4 {
+		t.Fatalf("retry attempts=%d, want 4", attempts.Load())
+	}
+}
+
+func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliversAndPreservesRawDLQ(t *testing.T) {
+	// Given
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+	fixture := publishedConfluentFixtures(t).Cases[0]
+	message := fixtureMessage(t, fixture.EventType)
+	payload, err := hex.DecodeString(fixture.PayloadHex)
+	if err != nil {
+		t.Fatalf("decode fixture payload: %v", err)
+	}
+	if err := proto.Unmarshal(payload, message); err != nil {
+		t.Fatalf("decode fixture message: %v", err)
+	}
+	config := commonkafka.TransportConfig{Brokers: strings.Split(brokers, ","), Topics: []string{fixture.Topic}, PublishTimeout: integrationTimeout}
+	producer, err := commonkafka.NewFranzProducer(config, registry)
+	if err != nil {
+		t.Fatalf("create Franz producer: %v", err)
+	}
+	t.Cleanup(producer.Close)
+	group := fmt.Sprintf("common-go-dlq-%d", time.Now().UnixNano())
+	key := []byte(group)
+	firstConfig := config
+	firstConfig.ConsumerGroup = group
+	first, err := commonkafka.NewFranzConsumer(firstConfig, registry, &failOnceRawPublisher{delegate: producer}, noWaitSleeper{})
+	if err != nil {
+		t.Fatalf("create first consumer: %v", err)
+	}
+	firstContext, cancelFirst := context.WithTimeout(context.Background(), integrationTimeout)
+	firstResult := make(chan error, 1)
+	go func() {
+		firstResult <- first.Run(firstContext, func(_ context.Context, record commonkafka.DecodedRecord) error {
+			if bytes.Equal(record.Key, key) {
+				return commonkafka.Permanent{Err: errors.New("invalid input")}
+			}
+			return nil
+		})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: key, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+		t.Fatalf("publish failed-DLQ target: %v", err)
+	}
+	select {
+	case err := <-firstResult:
+		if err == nil {
+			t.Fatal("first consumer should fail the DLQ publication")
+		}
+	case <-ctx.Done():
+		t.Fatalf("wait for failed DLQ: %v", ctx.Err())
+	}
+	cancelFirst()
+	first.Close()
+
+	secondConfig := config
+	secondConfig.ConsumerGroup = group
+	second, err := commonkafka.NewFranzConsumer(secondConfig, registry, producer, noWaitSleeper{})
+	if err != nil {
+		t.Fatalf("create replacement consumer: %v", err)
+	}
+	t.Cleanup(second.Close)
+	redelivered := make(chan commonkafka.RawRecord, 1)
+	secondContext, cancelSecond := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancelSecond()
+	secondResult := make(chan error, 1)
+	go func() {
+		secondResult <- second.Run(secondContext, func(_ context.Context, record commonkafka.DecodedRecord) error {
+			if bytes.Equal(record.Key, key) {
+				redelivered <- record.RawRecord
+				return commonkafka.Permanent{Err: errors.New("invalid input")}
+			}
+			return nil
+		})
+	}()
+	var source commonkafka.RawRecord
+	select {
+	case source = <-redelivered:
+	case <-ctx.Done():
+		t.Fatalf("wait for same-group redelivery: %v", ctx.Err())
+	}
+	dlq := pollRawIntegrationRecord(t, ctx, strings.Split(brokers, ","), group+"-observer", fixture.Topic+".DLQ", key)
+	second.Close()
+	cancelSecond()
+
+	// Then
+	if !bytes.Equal(source.Key, dlq.Key) || !bytes.Equal(source.Value, dlq.Value) {
+		t.Fatal("DLQ did not preserve source key and complete frame")
+	}
+	assertRawDlqHeaders(t, source.Headers, dlq.Headers, fixture.Topic)
+}
+
+func TestGivenCanceledHandler_WhenReplacementJoinsSameGroup_ThenRedeliversUncommittedSource(t *testing.T) {
+	// Given
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+	fixture := publishedConfluentFixtures(t).Cases[0]
+	message := fixtureMessage(t, fixture.EventType)
+	payload, err := hex.DecodeString(fixture.PayloadHex)
+	if err != nil {
+		t.Fatalf("decode fixture payload: %v", err)
+	}
+	if err := proto.Unmarshal(payload, message); err != nil {
+		t.Fatalf("decode fixture message: %v", err)
+	}
+	config := commonkafka.TransportConfig{Brokers: strings.Split(brokers, ","), Topics: []string{fixture.Topic}, PublishTimeout: integrationTimeout}
+	producer, err := commonkafka.NewFranzProducer(config, registry)
+	if err != nil {
+		t.Fatalf("create Franz producer: %v", err)
+	}
+	t.Cleanup(producer.Close)
+	group := fmt.Sprintf("common-go-cancel-%d", time.Now().UnixNano())
+	key := []byte(group)
+	firstConfig := config
+	firstConfig.ConsumerGroup = group
+	first, err := commonkafka.NewFranzConsumer(firstConfig, registry, producer, noWaitSleeper{})
+	if err != nil {
+		t.Fatalf("create first consumer: %v", err)
+	}
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	started := make(chan struct{}, 1)
+	firstResult := make(chan error, 1)
+	go func() {
+		firstResult <- first.Run(firstContext, func(handlerContext context.Context, record commonkafka.DecodedRecord) error {
+			if !bytes.Equal(record.Key, key) {
+				return nil
+			}
+			started <- struct{}{}
+			<-handlerContext.Done()
+			return handlerContext.Err()
+		})
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+	defer cancel()
+	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: key, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+		t.Fatalf("publish cancellation target: %v", err)
+	}
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatalf("wait for first handler: %v", ctx.Err())
+	}
+	cancelFirst()
+	first.Close()
+
+	secondConfig := config
+	secondConfig.ConsumerGroup = group
+	second, err := commonkafka.NewFranzConsumer(secondConfig, registry, producer, noWaitSleeper{})
+	if err != nil {
+		t.Fatalf("create replacement consumer: %v", err)
+	}
+	t.Cleanup(second.Close)
+	redelivered := make(chan struct{}, 1)
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	defer cancelSecond()
+	secondResult := make(chan error, 1)
+	go func() {
+		secondResult <- second.Run(secondContext, func(_ context.Context, record commonkafka.DecodedRecord) error {
+			if bytes.Equal(record.Key, key) {
+				redelivered <- struct{}{}
+			}
 			return nil
 		})
 	}()
 
 	// When
-	err = producer.Publish(ctx, commonkafka.Event{
-		Topic:   fixture.Topic,
-		Key:     testKey,
-		Payload: message,
-		EventID: fixture.Headers[commonkafka.HeaderEventID],
-		Source:  fixture.Headers[commonkafka.HeaderSource],
-	})
-	if err != nil {
-		t.Fatalf("acknowledged Franz publish: %v", err)
-	}
-
-	var record commonkafka.DecodedRecord
 	select {
-	case record = <-received:
+	case <-redelivered:
 	case <-ctx.Done():
-		t.Fatalf("consume published record: %v", ctx.Err())
+		t.Fatalf("wait for replacement redelivery: %v", ctx.Err())
 	}
-	close(deliveryComplete)
-	time.Sleep(500 * time.Millisecond)
-	cancel()
-	if err := <-runResult; err != nil && err != context.Canceled && err != context.DeadlineExceeded {
-		t.Fatalf("stop Franz consumer after delivery: %v", err)
-	}
+	cancelSecond()
+	second.Close()
 
 	// Then
-	if !bytes.Equal(record.Key, testKey) {
-		t.Fatalf("key = %q, want %q", record.Key, testKey)
-	}
-	if !proto.Equal(record.Message, message) {
-		t.Fatalf("decoded message = %T %v, want %T %v", record.Message, record.Message, message, message)
-	}
-	if eventType, ok := integrationHeader(record.Headers, commonkafka.HeaderEventType); !ok || eventType != fixture.EventType {
-		t.Fatalf("event-type = %q, want %q", eventType, fixture.EventType)
-	}
-	if source, ok := integrationHeader(record.Headers, commonkafka.HeaderSource); !ok || source != fixture.Headers[commonkafka.HeaderSource] {
-		t.Fatalf("source = %q, want %q", source, fixture.Headers[commonkafka.HeaderSource])
-	}
-	if eventID, ok := integrationHeader(record.Headers, commonkafka.HeaderEventID); !ok || eventID != fixture.Headers[commonkafka.HeaderEventID] {
-		t.Fatalf("event ID = %q, want %q", eventID, fixture.Headers[commonkafka.HeaderEventID])
-	}
-	frame, err := registry.Encode(fixture.Topic, message)
-	if err != nil {
-		t.Fatalf("re-encode published message: %v", err)
-	}
-	if !bytes.Equal(record.Value, frame) {
-		t.Fatal("consumed raw frame differs from Schema Registry frame")
-	}
+	// Reaching this point proves the canceled first handler did not commit the source record.
 }
 
 func integrationEndpoints(t *testing.T) (string, string) {
@@ -213,4 +469,71 @@ func integrationHeader(headers []commonkafka.Header, key string) (string, bool) 
 		}
 	}
 	return "", false
+}
+
+type noWaitSleeper struct{}
+
+func (noWaitSleeper) Sleep(context.Context, time.Duration) error { return nil }
+
+type failOnceRawPublisher struct {
+	delegate commonkafka.RawPublisher
+	failed   atomic.Bool
+}
+
+func (p *failOnceRawPublisher) PublishRaw(ctx context.Context, record commonkafka.RawRecord) error {
+	if !p.failed.Swap(true) {
+		return errors.New("deliberate DLQ outage")
+	}
+	return p.delegate.PublishRaw(ctx, record)
+}
+
+func pollRawIntegrationRecord(
+	t *testing.T,
+	ctx context.Context,
+	brokers []string,
+	group string,
+	topic string,
+	key []byte,
+) internalkafka.Record {
+	t.Helper()
+	consumer, err := internalkafka.NewConsumer(brokers, group, []string{topic})
+	if err != nil {
+		t.Fatalf("create raw DLQ observer: %v", err)
+	}
+	defer consumer.Close()
+	for {
+		record, received, err := consumer.Poll(ctx)
+		consumer.AllowRebalance()
+		if err != nil {
+			t.Fatalf("poll raw DLQ observer: %v", err)
+		}
+		if received && bytes.Equal(record.Key, key) {
+			return record
+		}
+	}
+}
+
+func assertRawDlqHeaders(t *testing.T, source []commonkafka.Header, actual []internalkafka.Header, topic string) {
+	t.Helper()
+	if len(actual) != len(source)+4 {
+		t.Fatalf("DLQ headers=%d, want %d", len(actual), len(source)+4)
+	}
+	for index, header := range source {
+		if actual[index].Key != header.Key || !bytes.Equal(actual[index].Value, header.Value) {
+			t.Fatalf("DLQ header %d does not preserve the source order and bytes", index)
+		}
+	}
+	appended := actual[len(source):]
+	if appended[0].Key != commonkafka.HeaderOriginalTopic || string(appended[0].Value) != topic {
+		t.Fatal("DLQ original topic diagnostic is missing")
+	}
+	if appended[1].Key != commonkafka.HeaderExceptionMessage || len(appended[1].Value) == 0 {
+		t.Fatal("DLQ exception diagnostic is missing")
+	}
+	if appended[2].Key != commonkafka.HeaderFailedAt || len(appended[2].Value) == 0 {
+		t.Fatal("DLQ failed-at diagnostic is missing")
+	}
+	if appended[3].Key != commonkafka.HeaderRetryCount || string(appended[3].Value) != "1" {
+		t.Fatal("DLQ retry-count diagnostic is wrong")
+	}
 }

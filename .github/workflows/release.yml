@@ -30,10 +30,8 @@ jobs:
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
-      - name: Verify source and integration contract
-        run: |
-          make verify
-          make integration
+      - name: Verify source
+        run: make verify
       - name: Create provenance report
         shell: bash
         run: |
@@ -46,3 +44,7 @@ jobs:
         with:
           name: common-go-release-evidence-${{ github.sha }}
           path: evidence/
+
+  kafka-contract-integration:
+    needs: validate-release
+    uses: ./.github/workflows/kafka-contract-integration.yml

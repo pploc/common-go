@@ -1,0 +1,160 @@
+name: Kafka Contract Integration
+
+on:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  kafka-contract-integration:
+    runs-on: ubuntu-latest
+    services:
+      kafka:
+        image: confluentinc/cp-kafka:7.7.1
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: "1"
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+          KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      schema-registry:
+        image: confluentinc/cp-schema-registry:7.7.1
+        ports:
+          - 8081:8081
+        env:
+          SCHEMA_REGISTRY_HOST_NAME: schema-registry
+          SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+          SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+    env:
+      KAFKA_BROKERS: localhost:9092
+      SCHEMA_REGISTRY_URL: http://localhost:8081
+      PROTO_VERSION: v1.1.0
+      GYM_PROTO_SHA: 740e476915117ab594a6e7ee3677e6a2c39c3c80
+      GYM_PROTO_FIXTURE_SHA256: e5a5d0944229c9e0c97dc5e872f01e7597993e5732f2014b7d8e5efdf965a27e
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: common-go
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pploc/gym-proto
+          ref: v1.1.0
+          path: gym-proto
+          fetch-depth: 1
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+          check-latest: true
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "26"
+
+      - uses: bufbuild/buf-setup-action@v1
+
+      - name: Verify immutable protobuf input
+        working-directory: common-go
+        shell: bash
+        run: |
+          set -euo pipefail
+          proto_module="$(go list -m -json github.com/pploc/proto-go)"
+          test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_VERSION"
+          test -z "$(jq -r '.Replace // empty' <<<"$proto_module")"
+          test "$(git -C ../gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
+          test "$(git -C ../gym-proto rev-parse "${PROTO_VERSION}^{commit}")" = "$GYM_PROTO_SHA"
+          test "$(sha256sum ../gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$GYM_PROTO_FIXTURE_SHA256"
+
+      - name: Wait for Kafka and Schema Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..90}; do
+            if curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" >/dev/null \
+              && bash -c '</dev/tcp/127.0.0.1/9092'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "Kafka and Schema Registry did not become ready" >&2
+          exit 1
+
+      - name: Seed and verify immutable Confluent fixtures
+        working-directory: gym-proto
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp contracts/v1/kafka/confluent-7.7.1-fixtures.json /tmp/committed-fixtures.json
+          sed -i 's/\r$//' gradlew scripts/verify-generated-routes.sh
+          buf generate
+          ./gradlew generateConfluentFixtures -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          committed = json.loads(Path('/tmp/committed-fixtures.json').read_text())
+          generated = json.loads(Path('contracts/v1/kafka/confluent-7.7.1-fixtures.json').read_text())
+          committed['generatedBy']['schemaRegistryUrl'] = '<registry-url>'
+          generated['generatedBy']['schemaRegistryUrl'] = '<registry-url>'
+          if committed != generated:
+              raise SystemExit('generated Confluent fixtures differ from the immutable artifact')
+          PY
+          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 9
+          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
+            test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -r '.compatibilityLevel')" = BACKWARD
+          done
+
+      - name: Create immutable fixture topics
+        shell: bash
+        run: |
+          set -euo pipefail
+          kafka_container="$(docker ps --filter 'ancestor=confluentinc/cp-kafka:7.7.1' --format '{{.ID}}')"
+          test -n "$kafka_container"
+          jq -r '.cases[].topic' gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
+            docker exec "$kafka_container" kafka-topics --bootstrap-server kafka:29092 \
+              --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor 1
+          done
+
+      - name: Run real Kafka and Schema Registry contract tests
+        working-directory: common-go
+        run: make integration
+
+      - name: Create sanitized contract evidence
+        if: always()
+        working-directory: common-go
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/source-sha.txt
+          git -C ../gym-proto rev-parse HEAD > evidence/gym-proto-source-sha.txt
+          go list -m -json github.com/pploc/proto-go > evidence/proto-go-module.json
+          sha256sum "$(go list -m -f '{{.Dir}}' github.com/pploc/proto-go)/contracts/v1/kafka/confluent-7.7.1-fixtures.json" > evidence/fixture.sha256
+          curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/schema-registry-subjects.json || true
+          if [[ -f evidence/schema-registry-subjects.json ]]; then
+            jq -r '.[]' evidence/schema-registry-subjects.json | while read -r subject; do
+              curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -S . > "evidence/${subject}.compatibility.json" || true
+            done
+          fi
+
+      - name: Upload contract evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: common-go-kafka-contract-${{ github.sha }}
+          path: common-go/evidence/
+          if-no-files-found: error
