@@ -110,7 +110,7 @@ jobs:
               and .commonJavaCandidateRef == $javaRef and .commonJavaSha == $javaSha and .commonJava == $javaVersion
               and .status == "success" and .javaToGo == "pass" and .goToJava == "pass"
               and .retryCommitDlq == "pass" and .registryMutation == "none"
-            ' matrix/cross-language-matrix.json >/dev/null
+            ' matrix/evidence/cross-language-matrix.json >/dev/null
 
       - uses: actions/checkout@v4
         with:

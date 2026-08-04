@@ -112,7 +112,7 @@ func (r *ConfluentProtobufRegistry) Close() error {
 
 func classifyRegistryError(operation string, err error) error {
 	var registryError *rest.Error
-	if errors.As(err, &registryError) && registryError.Code >= 400 && registryError.Code < 500 {
+	if errors.As(err, &registryError) {
 		return Permanent{Err: fmt.Errorf("kafka: %s: %w", operation, err)}
 	}
 	return fmt.Errorf("kafka: %s: %w", operation, err)

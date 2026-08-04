@@ -372,7 +372,7 @@ func TestGivenCanceledOrExpiredContext_WhenGoPublishes_ThenReturnsWithoutAcknowl
 		t.Fatalf("decode fixture message: %v", err)
 	}
 	producer, err := commonkafka.NewFranzProducer(commonkafka.TransportConfig{
-		Brokers: strings.Split(brokers, ","), PublishTimeout: time.Millisecond,
+		Brokers: strings.Split(brokers, ","), PublishTimeout: integrationTimeout,
 	}, registry)
 	if err != nil {
 		t.Fatalf("create producer: %v", err)
