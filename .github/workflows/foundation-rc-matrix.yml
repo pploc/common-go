@@ -135,18 +135,28 @@ jobs:
           EXPECTED_GO_SHA: ${{ inputs.common_go_sha }}
         run: |
           set -euo pipefail
-          test "$(git -C common-java rev-parse HEAD)" = "$EXPECTED_JAVA_SHA"
-          test "$(git -C common-go rev-parse HEAD)" = "$EXPECTED_GO_SHA"
-          test "$(git -C common-java rev-parse "$EXPECTED_JAVA_REF^{commit}")" = "$EXPECTED_JAVA_SHA"
-          test "$(git -C common-go rev-parse "$EXPECTED_GO_REF^{commit}")" = "$EXPECTED_GO_SHA"
-          test "$(git -C gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
-          test "$(git -C gym-proto rev-parse 'v1.1.0^{commit}')" = "$GYM_PROTO_SHA"
-          test "$(sha256sum gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$FIXTURE_SHA256"
-          test "$(git ls-remote https://github.com/pploc/proto-go.git "refs/tags/${PROTO_GO_VERSION}^{}" | cut -f1)" = "$PROTO_GO_SHA"
+          assert_equal() {
+            local name="$1" expected="$2" actual="$3"
+            if [[ "$actual" != "$expected" ]]; then
+              printf '%s mismatch: expected %s, got %s\n' "$name" "$expected" "$actual" >&2
+              exit 1
+            fi
+          }
+          assert_equal common_java_head "$EXPECTED_JAVA_SHA" "$(git -C common-java rev-parse HEAD)"
+          assert_equal common_go_head "$EXPECTED_GO_SHA" "$(git -C common-go rev-parse HEAD)"
+          assert_equal common_java_candidate "$EXPECTED_JAVA_SHA" "$(git -C common-java rev-parse "$EXPECTED_JAVA_REF^{commit}")"
+          assert_equal common_go_candidate "$EXPECTED_GO_SHA" "$(git -C common-go rev-parse "$EXPECTED_GO_REF^{commit}")"
+          assert_equal gym_proto_head "$GYM_PROTO_SHA" "$(git -C gym-proto rev-parse HEAD)"
+          assert_equal gym_proto_tag "$GYM_PROTO_SHA" "$(git -C gym-proto rev-parse 'v1.1.0^{commit}')"
+          assert_equal fixture_sha256 "$FIXTURE_SHA256" "$(sha256sum gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)"
+          assert_equal proto_go_tag "$PROTO_GO_SHA" "$(git ls-remote https://github.com/pploc/proto-go.git "refs/tags/${PROTO_GO_VERSION}^{}" | cut -f1)"
           proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
-          test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_GO_VERSION"
-          test "$(jq -r '.Replace // empty' <<<"$proto_module")" = ""
-          grep -Eq "^github.com/pploc/proto-go v${PROTO_GO_VERSION} h1:" common-go/go.sum
+          assert_equal proto_go_version "$PROTO_GO_VERSION" "$(jq -r '.Version' <<<"$proto_module")"
+          assert_equal proto_go_replace "" "$(jq -r '.Replace // empty' <<<"$proto_module")"
+          grep -Eq "^github.com/pploc/proto-go v${PROTO_GO_VERSION} h1:" common-go/go.sum || {
+            printf 'proto_go_checksum missing from go.sum\n' >&2
+            exit 1
+          }
 
       - name: Install Go verification tools
         run: |
