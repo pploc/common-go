@@ -84,7 +84,7 @@ jobs:
           jq -e --argjson id "$MATRIX_RUN_ID" '
             .id == $id and .repository.full_name == "pploc/common-go"
             and .head_repository.full_name == "pploc/common-go"
-            and .head_branch == "develop" and .event == "workflow_dispatch"
+            and .event == "workflow_dispatch"
             and .path == ".github/workflows/foundation-rc-matrix.yml"
             and .status == "completed" and .conclusion == "success"
           ' <<<"$run" >/dev/null
