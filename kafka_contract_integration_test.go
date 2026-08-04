@@ -302,6 +302,32 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	cancelFirst()
 	first.Close()
 
+	observer, err := internalkafka.NewConsumer(strings.Split(brokers, ","), group+"-observer", []string{fixture.Topic + ".DLQ"})
+	if err != nil {
+		t.Fatalf("create raw DLQ observer: %v", err)
+	}
+	observerContext, cancelObserver := context.WithTimeout(context.Background(), integrationTimeout)
+	t.Cleanup(func() {
+		cancelObserver()
+		observer.Close()
+	})
+	observedDLQ := make(chan internalkafka.Record, 1)
+	observerError := make(chan error, 1)
+	go func() {
+		for {
+			record, received, err := observer.Poll(observerContext)
+			observer.AllowRebalance()
+			if err != nil {
+				observerError <- err
+				return
+			}
+			if received && bytes.Equal(record.Key, key) {
+				observedDLQ <- record
+				return
+			}
+		}
+	}()
+
 	secondConfig := config
 	secondConfig.ConsumerGroup = group
 	second, err := commonkafka.NewFranzConsumer(secondConfig, registry, producer, noWaitSleeper{})
@@ -325,10 +351,17 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	var source commonkafka.RawRecord
 	select {
 	case source = <-redelivered:
-	case <-ctx.Done():
-		t.Fatalf("wait for same-group redelivery: %v", ctx.Err())
+	case <-secondContext.Done():
+		t.Fatalf("wait for same-group redelivery: %v", secondContext.Err())
 	}
-	dlq := pollRawIntegrationRecord(t, ctx, strings.Split(brokers, ","), group+"-observer", fixture.Topic+".DLQ", key)
+	var dlq internalkafka.Record
+	select {
+	case dlq = <-observedDLQ:
+	case err := <-observerError:
+		t.Fatalf("poll raw DLQ observer: %v", err)
+	case <-observerContext.Done():
+		t.Fatalf("wait for raw DLQ: %v", observerContext.Err())
+	}
 	second.Close()
 	cancelSecond()
 
@@ -485,32 +518,6 @@ func (p *failOnceRawPublisher) PublishRaw(ctx context.Context, record commonkafk
 		return errors.New("deliberate DLQ outage")
 	}
 	return p.delegate.PublishRaw(ctx, record)
-}
-
-func pollRawIntegrationRecord(
-	t *testing.T,
-	ctx context.Context,
-	brokers []string,
-	group string,
-	topic string,
-	key []byte,
-) internalkafka.Record {
-	t.Helper()
-	consumer, err := internalkafka.NewConsumer(brokers, group, []string{topic})
-	if err != nil {
-		t.Fatalf("create raw DLQ observer: %v", err)
-	}
-	defer consumer.Close()
-	for {
-		record, received, err := consumer.Poll(ctx)
-		consumer.AllowRebalance()
-		if err != nil {
-			t.Fatalf("poll raw DLQ observer: %v", err)
-		}
-		if received && bytes.Equal(record.Key, key) {
-			return record
-		}
-	}
 }
 
 func assertRawDlqHeaders(t *testing.T, source []commonkafka.Header, actual []internalkafka.Header, topic string) {
