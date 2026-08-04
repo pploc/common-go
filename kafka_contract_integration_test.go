@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +18,7 @@ import (
 
 	internalkafka "github.com/pploc/common-go/internal/kafka"
 	commonkafka "github.com/pploc/common-go/kafka"
+	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -173,6 +175,231 @@ func TestGivenSeededKafkaAndRegistry_WhenPublishingWithFranz_ThenConsumesEveryDe
 	}
 }
 
+func TestGivenJavaPublishedMatrix_WhenGoConsumes_ThenVerifiesEveryFixture(t *testing.T) {
+	// Given
+	runID := foundationMatrixRunID(t)
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+
+	// When / Then
+	for _, fixture := range publishedConfluentFixtures(t).Cases {
+		fixture := fixture
+		t.Run(fixture.Name, func(t *testing.T) {
+			key := []byte(foundationMatrixKey(fixture, runID, "java-to-go"))
+			consumer, err := internalkafka.NewConsumer(strings.Split(brokers, ","), runID+"-java-to-go-"+fixture.Name, []string{fixture.Topic})
+			if err != nil {
+				t.Fatalf("create matrix consumer: %v", err)
+			}
+			t.Cleanup(consumer.Close)
+			ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+			defer cancel()
+			record := pollInternalRecordForKey(t, ctx, consumer, key)
+			decoded, err := commonkafka.Decode(commonkafka.RawRecord{
+				Topic: record.Topic, Partition: record.Partition, Offset: record.Offset,
+				Key: record.Key, Value: record.Value, Headers: internalHeaders(record.Headers),
+			}, registry)
+			if err != nil {
+				t.Fatalf("decode Java matrix record: %v", err)
+			}
+			expected := fixtureMessage(t, fixture.EventType)
+			payload, err := hex.DecodeString(fixture.PayloadHex)
+			if err != nil {
+				t.Fatalf("decode fixture payload: %v", err)
+			}
+			if err := proto.Unmarshal(payload, expected); err != nil {
+				t.Fatalf("unmarshal fixture payload: %v", err)
+			}
+			if record.Topic != fixture.Topic || !bytes.Equal(record.Key, key) || !proto.Equal(decoded.Message, expected) {
+				t.Fatal("Java-to-Go matrix record differs from canonical fixture")
+			}
+			subject, err := commonkafka.SubjectName(record.Topic)
+			if err != nil {
+				t.Fatalf("resolve matrix subject: %v", err)
+			}
+			if subject != fixture.Subject {
+				t.Fatalf("subject = %q, want %q", subject, fixture.Subject)
+			}
+			if string(decoded.Message.ProtoReflect().Descriptor().FullName()) != fixture.EventType {
+				t.Fatalf("descriptor = %q, want %q", decoded.Message.ProtoReflect().Descriptor().FullName(), fixture.EventType)
+			}
+			if len(decoded.Headers) != len(fixture.Headers) {
+				t.Fatalf("headers = %d, want %d", len(decoded.Headers), len(fixture.Headers))
+			}
+			for index, header := range canonicalFixtureHeaders(fixture.Headers) {
+				if decoded.Headers[index].Key != header.Key || !bytes.Equal(decoded.Headers[index].Value, header.Value) {
+					t.Fatalf("header %d differs from canonical fixture", index)
+				}
+			}
+			frame, err := registry.Encode(fixture.Topic, expected)
+			if err != nil {
+				t.Fatalf("encode canonical frame: %v", err)
+			}
+			if !bytes.Equal(record.Value, frame) || !bytes.Equal(record.Value, mustDecodeHex(t, fixture.Frame.CompleteHex)) {
+				t.Fatal("Java-to-Go matrix frame differs from canonical frame")
+			}
+		})
+	}
+}
+
+func TestGivenMatrixRun_WhenGoPublishes_ThenWritesEveryFixtureForJava(t *testing.T) {
+	// Given
+	runID := foundationMatrixRunID(t)
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+	var publishTime time.Time
+	producer, err := commonkafka.NewFranzProducer(commonkafka.TransportConfig{
+		Brokers: strings.Split(brokers, ","), PublishTimeout: integrationTimeout,
+		Clock: func() time.Time { return publishTime },
+	}, registry)
+	if err != nil {
+		t.Fatalf("create matrix producer: %v", err)
+	}
+	defer producer.Close()
+
+	// When
+	for _, fixture := range publishedConfluentFixtures(t).Cases {
+		publishTime = time.UnixMilli(matrixFixtureTimestamp(t, fixture))
+		message := fixtureMessage(t, fixture.EventType)
+		payload := mustDecodeHex(t, fixture.PayloadHex)
+		if err := proto.Unmarshal(payload, message); err != nil {
+			t.Fatalf("decode fixture %s: %v", fixture.Name, err)
+		}
+		parts := strings.Split(fixture.Headers[commonkafka.HeaderTraceParent], "-")
+		traceID, err := trace.TraceIDFromHex(parts[1])
+		if err != nil {
+			t.Fatalf("parse trace ID: %v", err)
+		}
+		spanID, err := trace.SpanIDFromHex(parts[2])
+		if err != nil {
+			t.Fatalf("parse span ID: %v", err)
+		}
+		traceState := trace.TraceState{}
+		if value := fixture.Headers[commonkafka.HeaderTraceState]; value != "" {
+			traceState, err = trace.ParseTraceState(value)
+			if err != nil {
+				t.Fatalf("parse tracestate: %v", err)
+			}
+		}
+		ctx := trace.ContextWithRemoteSpanContext(context.Background(), trace.NewSpanContext(trace.SpanContextConfig{
+			TraceID: traceID, SpanID: spanID, TraceFlags: trace.FlagsSampled, TraceState: traceState,
+		}))
+		err = producer.Publish(ctx, commonkafka.Event{
+			Topic: fixture.Topic, Key: []byte(foundationMatrixKey(fixture, runID, "go-to-java")), Payload: message,
+			EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource],
+		})
+		if err != nil {
+			t.Fatalf("publish Go matrix fixture %s: %v", fixture.Name, err)
+		}
+	}
+
+	// Then
+	if len(publishedConfluentFixtures(t).Cases) != 9 {
+		t.Fatal("foundation matrix requires all nine canonical fixtures")
+	}
+}
+
+func TestGivenMalformedAndUnknownSchemaFrames_WhenGoConsumes_ThenPreservesRawBytesInDLQ(t *testing.T) {
+	// Given
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+	fixture := publishedConfluentFixtures(t).Cases[0]
+	config := commonkafka.TransportConfig{
+		Brokers: strings.Split(brokers, ","), Topics: []string{fixture.Topic}, PublishTimeout: integrationTimeout,
+	}
+	producer, err := commonkafka.NewFranzProducer(config, registry)
+	if err != nil {
+		t.Fatalf("create producer: %v", err)
+	}
+	defer producer.Close()
+	testCases := []struct {
+		name  string
+		frame func([]byte)
+	}{
+		{name: "malformed-magic-byte", frame: func(frame []byte) { frame[0] = 1 }},
+		{name: "unknown-schema-id", frame: func(frame []byte) { copy(frame[1:5], []byte{0x7f, 0xff, 0xff, 0xff}) }},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			group := fmt.Sprintf("common-go-invalid-%s-%d", testCase.name, time.Now().UnixNano())
+			key := []byte(group)
+			frame := mustDecodeHex(t, fixture.Frame.CompleteHex)
+			testCase.frame(frame)
+			raw := commonkafka.RawRecord{
+				Topic: fixture.Topic, Key: key, Value: frame, Headers: fixtureHeaders(fixture.Headers),
+			}
+			observer, err := internalkafka.NewConsumer(strings.Split(brokers, ","), group+"-dlq", []string{fixture.Topic + ".DLQ"})
+			if err != nil {
+				t.Fatalf("create DLQ observer: %v", err)
+			}
+			defer observer.Close()
+			consumerConfig := config
+			consumerConfig.ConsumerGroup = group
+			consumer, err := commonkafka.NewFranzConsumer(consumerConfig, registry, producer, noWaitSleeper{})
+			if err != nil {
+				t.Fatalf("create consumer: %v", err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), integrationTimeout)
+			defer cancel()
+			runResult := make(chan error, 1)
+			go func() {
+				runResult <- consumer.Run(ctx, func(context.Context, commonkafka.DecodedRecord) error { return nil })
+			}()
+
+			// When
+			if err := producer.PublishRaw(ctx, raw); err != nil {
+				t.Fatalf("publish invalid frame: %v", err)
+			}
+			dlq := pollInternalRecordForKey(t, ctx, observer, key)
+			consumer.Close()
+
+			// Then
+			if !bytes.Equal(dlq.Key, raw.Key) || !bytes.Equal(dlq.Value, raw.Value) {
+				t.Fatal("invalid frame DLQ did not preserve source bytes")
+			}
+			assertRawDlqHeaders(t, raw.Headers, dlq.Headers, fixture.Topic)
+		})
+	}
+}
+
+func TestGivenCanceledOrExpiredContext_WhenGoPublishes_ThenReturnsWithoutAcknowledgement(t *testing.T) {
+	// Given
+	brokers, registryURL := integrationEndpoints(t)
+	registry := newIntegrationRegistry(t, registryURL)
+	fixture := publishedConfluentFixtures(t).Cases[0]
+	message := fixtureMessage(t, fixture.EventType)
+	if err := proto.Unmarshal(mustDecodeHex(t, fixture.PayloadHex), message); err != nil {
+		t.Fatalf("decode fixture message: %v", err)
+	}
+	producer, err := commonkafka.NewFranzProducer(commonkafka.TransportConfig{
+		Brokers: strings.Split(brokers, ","), PublishTimeout: time.Millisecond,
+	}, registry)
+	if err != nil {
+		t.Fatalf("create producer: %v", err)
+	}
+	defer producer.Close()
+	event := commonkafka.Event{
+		Topic: fixture.Topic, Key: []byte("canceled-publish"), Payload: message,
+		EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource],
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	expired, expire := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer expire()
+
+	// When
+	canceledErr := producer.Publish(canceled, event)
+	expiredErr := producer.Publish(expired, event)
+
+	// Then
+	if !errors.Is(canceledErr, context.Canceled) {
+		t.Fatalf("canceled publish error = %v", canceledErr)
+	}
+	if !errors.Is(expiredErr, context.DeadlineExceeded) {
+		t.Fatalf("expired publish error = %v", expiredErr)
+	}
+}
+
 func TestGivenRetryableHandler_WhenFranzConsumesLiveRecord_ThenCommitsOnlyAfterSuccess(t *testing.T) {
 	// Given
 	brokers, registryURL := integrationEndpoints(t)
@@ -270,6 +497,8 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	t.Cleanup(producer.Close)
 	group := fmt.Sprintf("common-go-dlq-%d", time.Now().UnixNano())
 	key := []byte(group)
+	barrierKey := []byte(group + "-later-offset")
+	var firstLaterOffset atomic.Int32
 	firstConfig := config
 	firstConfig.ConsumerGroup = group
 	first, err := commonkafka.NewFranzConsumer(firstConfig, registry, &failOnceRawPublisher{delegate: producer}, noWaitSleeper{})
@@ -280,8 +509,11 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	firstResult := make(chan error, 1)
 	go func() {
 		firstResult <- first.Run(firstContext, func(_ context.Context, record commonkafka.DecodedRecord) error {
-			if bytes.Equal(record.Key, key) {
+			switch {
+			case bytes.Equal(record.Key, key):
 				return commonkafka.Permanent{Err: errors.New("invalid input")}
+			case bytes.Equal(record.Key, barrierKey):
+				firstLaterOffset.Add(1)
 			}
 			return nil
 		})
@@ -291,6 +523,9 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: key, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
 		t.Fatalf("publish failed-DLQ target: %v", err)
 	}
+	if err := producer.Publish(ctx, commonkafka.Event{Topic: fixture.Topic, Key: barrierKey, Payload: message, EventID: fixture.Headers[commonkafka.HeaderEventID], Source: fixture.Headers[commonkafka.HeaderSource]}); err != nil {
+		t.Fatalf("publish later offset: %v", err)
+	}
 	select {
 	case err := <-firstResult:
 		if err == nil {
@@ -298,6 +533,9 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 		}
 	case <-ctx.Done():
 		t.Fatalf("wait for failed DLQ: %v", ctx.Err())
+	}
+	if firstLaterOffset.Load() != 0 {
+		t.Fatal("consumer processed later offset after incomplete DLQ source")
 	}
 	cancelFirst()
 	first.Close()
@@ -366,6 +604,9 @@ func TestGivenFailedDlqAndCanceledConsumer_WhenReplacedInSameGroup_ThenRedeliver
 	cancelSecond()
 
 	// Then
+	if firstLaterOffset.Load() != 0 {
+		t.Fatal("consumer processed later offset after incomplete DLQ source")
+	}
 	if !bytes.Equal(source.Key, dlq.Key) || !bytes.Equal(source.Value, dlq.Value) {
 		t.Fatal("DLQ did not preserve source key and complete frame")
 	}
@@ -458,6 +699,59 @@ func TestGivenCanceledHandler_WhenReplacementJoinsSameGroup_ThenRedeliversUncomm
 	// Reaching this point proves the canceled first handler did not commit the source record.
 }
 
+func matrixFixtureTimestamp(t *testing.T, fixture confluentFixtureCase) int64 {
+	t.Helper()
+	value, err := strconv.ParseInt(fixture.Headers[commonkafka.HeaderTimestamp], 10, 64)
+	if err != nil {
+		t.Fatalf("parse fixture timestamp: %v", err)
+	}
+	return value
+}
+
+func foundationMatrixRunID(t *testing.T) string {
+	t.Helper()
+	runID := strings.TrimSpace(os.Getenv("FOUNDATION_MATRIX_RUN_ID"))
+	if runID == "" {
+		t.Skip("FOUNDATION_MATRIX_RUN_ID is required for cross-language matrix tests")
+	}
+	return runID
+}
+
+func foundationMatrixKey(fixture confluentFixtureCase, runID, direction string) string {
+	return runID + "-" + direction + "-" + fixture.Name
+}
+
+func pollInternalRecordForKey(t *testing.T, ctx context.Context, consumer *internalkafka.Consumer, key []byte) internalkafka.Record {
+	t.Helper()
+	for {
+		record, received, err := consumer.Poll(ctx)
+		consumer.AllowRebalance()
+		if err != nil {
+			t.Fatalf("poll matrix record: %v", err)
+		}
+		if received && bytes.Equal(record.Key, key) {
+			return record
+		}
+	}
+}
+
+func internalHeaders(headers []internalkafka.Header) []commonkafka.Header {
+	result := make([]commonkafka.Header, len(headers))
+	for index, header := range headers {
+		result[index] = commonkafka.Header{Key: header.Key, Value: header.Value}
+	}
+	return result
+}
+
+func mustDecodeHex(t *testing.T, value string) []byte {
+	t.Helper()
+	decoded, err := hex.DecodeString(value)
+	if err != nil {
+		t.Fatalf("decode hex: %v", err)
+	}
+	return decoded
+}
+
 func integrationEndpoints(t *testing.T) (string, string) {
 	t.Helper()
 	brokers := strings.TrimSpace(os.Getenv("KAFKA_BROKERS"))
@@ -491,6 +785,24 @@ func fixtureHeaders(headers map[string]string) []commonkafka.Header {
 	result := make([]commonkafka.Header, 0, len(keys))
 	for _, key := range keys {
 		result = append(result, commonkafka.Header{Key: key, Value: []byte(headers[key])})
+	}
+	return result
+}
+
+func canonicalFixtureHeaders(headers map[string]string) []commonkafka.Header {
+	keys := []string{
+		commonkafka.HeaderEventType,
+		commonkafka.HeaderSource,
+		commonkafka.HeaderTimestamp,
+		commonkafka.HeaderEventID,
+		commonkafka.HeaderTraceParent,
+	}
+	result := make([]commonkafka.Header, 0, len(keys)+1)
+	for _, key := range keys {
+		result = append(result, commonkafka.Header{Key: key, Value: []byte(headers[key])})
+	}
+	if value := headers[commonkafka.HeaderTraceState]; value != "" {
+		result = append(result, commonkafka.Header{Key: commonkafka.HeaderTraceState, Value: []byte(value)})
 	}
 	return result
 }

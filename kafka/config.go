@@ -14,6 +14,7 @@ type TransportConfig struct {
 	Topics         []string
 	ConsumerGroup  string
 	PublishTimeout time.Duration
+	Clock          func() time.Time
 }
 
 // Validate checks configuration shared by the acknowledged producer and manual

@@ -1,0 +1,354 @@
+name: Foundation RC Matrix
+run-name: Foundation RC Matrix java=${{ inputs.common_java_sha }}@${{ inputs.common_java_version }} go=${{ inputs.common_go_sha }}@${{ inputs.common_go_version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      common_java_ref:
+        description: Immutable non-SemVer common-java candidate tag
+        required: true
+        default: candidate/v2.0.0-rc.1
+      common_java_sha:
+        description: Expected common-java commit SHA
+        required: true
+      common_go_ref:
+        description: Immutable non-SemVer common-go candidate tag
+        required: true
+        default: candidate/v0.3.0-rc.1
+      common_go_sha:
+        description: Expected common-go commit SHA
+        required: true
+      common_java_version:
+        description: Intended Java RC version
+        required: true
+        default: 2.0.0-rc.1
+      common_go_version:
+        description: Intended Go RC version
+        required: true
+        default: v0.3.0-rc.1
+
+permissions:
+  contents: read
+
+jobs:
+  foundation-rc-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      kafka:
+        image: confluentinc/cp-kafka:7.7.1
+        ports:
+          - 9092:9092
+        env:
+          KAFKA_NODE_ID: "1"
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+          KAFKA_LISTENERS: PLAINTEXT://kafka:29092,CONTROLLER://kafka:29093,PLAINTEXT_HOST://0.0.0.0:9092
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+          KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: "1"
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: "1"
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: "0"
+          KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      schema-registry:
+        image: confluentinc/cp-schema-registry:7.7.1
+        ports:
+          - 8081:8081
+        env:
+          SCHEMA_REGISTRY_HOST_NAME: schema-registry
+          SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+          SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: PLAINTEXT://kafka:29092
+    env:
+      KAFKA_BROKERS: localhost:9092
+      SCHEMA_REGISTRY_URL: http://localhost:8081
+      GYM_PROTO_TAG: v1.1.0
+      GYM_PROTO_SHA: 740e476915117ab594a6e7ee3677e6a2c39c3c80
+      PROTO_GO_VERSION: v1.1.0
+      PROTO_GO_SHA: 6f070d25f8361e6550e0bd9a309a738d2a0dbd21
+      FIXTURE_SHA256: e5a5d0944229c9e0c97dc5e872f01e7597993e5732f2014b7d8e5efdf965a27e
+      FOUNDATION_MATRIX_RUN_ID: foundation-${{ github.run_id }}-${{ github.run_attempt }}
+      GITHUB_ACTOR: ${{ github.actor }}
+    steps:
+      - name: Validate immutable candidate inputs
+        shell: bash
+        env:
+          COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
+          COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
+          COMMON_GO_REF: ${{ inputs.common_go_ref }}
+          COMMON_GO_SHA: ${{ inputs.common_go_sha }}
+          COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
+          COMMON_GO_VERSION: ${{ inputs.common_go_version }}
+        run: |
+          set -euo pipefail
+          [[ "$COMMON_JAVA_REF" =~ ^candidate/v2\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_JAVA_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMMON_GO_REF" =~ ^candidate/v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_GO_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMMON_JAVA_VERSION" =~ ^2\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_GO_VERSION" =~ ^v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          test "$COMMON_JAVA_REF" = "candidate/v$COMMON_JAVA_VERSION"
+          test "$COMMON_GO_REF" = "candidate/$COMMON_GO_VERSION"
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pploc/common-go
+          ref: ${{ inputs.common_go_ref }}
+          path: common-go
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pploc/common-java
+          ref: ${{ inputs.common_java_ref }}
+          path: common-java
+          fetch-depth: 0
+
+      - uses: actions/checkout@v4
+        with:
+          repository: pploc/gym-proto
+          ref: v1.1.0
+          path: gym-proto
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          check-latest: false
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: "26"
+
+      - uses: bufbuild/buf-setup-action@v1
+
+      - name: Bind refs, commits, and dependencies
+        shell: bash
+        env:
+          EXPECTED_JAVA_REF: ${{ inputs.common_java_ref }}
+          EXPECTED_JAVA_SHA: ${{ inputs.common_java_sha }}
+          EXPECTED_GO_REF: ${{ inputs.common_go_ref }}
+          EXPECTED_GO_SHA: ${{ inputs.common_go_sha }}
+        run: |
+          set -euo pipefail
+          test "$(git -C common-java rev-parse HEAD)" = "$EXPECTED_JAVA_SHA"
+          test "$(git -C common-go rev-parse HEAD)" = "$EXPECTED_GO_SHA"
+          test "$(git -C common-java rev-parse "$EXPECTED_JAVA_REF^{commit}")" = "$EXPECTED_JAVA_SHA"
+          test "$(git -C common-go rev-parse "$EXPECTED_GO_REF^{commit}")" = "$EXPECTED_GO_SHA"
+          test "$(git -C gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
+          test "$(git -C gym-proto rev-parse 'v1.1.0^{commit}')" = "$GYM_PROTO_SHA"
+          test "$(sha256sum gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$FIXTURE_SHA256"
+          test "$(jq -r '.technicalEvidence.protoGoSha' gym-proto/contracts/v1/manifest.json)" = "$PROTO_GO_SHA"
+          proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
+          test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_GO_VERSION"
+          test "$(jq -r '.Replace // empty' <<<"$proto_module")" = ""
+          test "$(jq -r '.Sum' <<<"$proto_module")" != ""
+
+      - name: Install Go verification tools
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
+      - name: Verify exact candidate sources
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/logs
+          (cd common-java && ./gradlew clean check jacocoTestCoverageVerification jar sourcesJar javadocJar generatePomFileForGprPublication --no-daemon) 2>&1 | tee evidence/logs/java-candidate-verification.log
+          make -C common-go verify 2>&1 | tee evidence/logs/go-candidate-verification.log
+          go version > evidence/go-toolchain.txt
+          java -version 2> evidence/java-toolchain.txt
+
+      - name: Wait for Kafka and Schema Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          for attempt in {1..90}; do
+            if curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" >/dev/null \
+              && bash -c '</dev/tcp/127.0.0.1/9092'; then
+              exit 0
+            fi
+            sleep 2
+          done
+          printf '%s\n' 'Kafka and Schema Registry did not become ready' >&2
+          exit 1
+
+      - name: Seed immutable Registry and topics
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 0
+          cp gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json /tmp/committed-fixtures.json
+          cd gym-proto
+          sed -i 's/\r$//' gradlew scripts/verify-generated-routes.sh
+          buf generate
+          ./gradlew generateConfluentFixtures -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          committed = json.loads(Path('/tmp/committed-fixtures.json').read_text())
+          generated = json.loads(Path('contracts/v1/kafka/confluent-7.7.1-fixtures.json').read_text())
+          committed['generatedBy']['schemaRegistryUrl'] = '<registry-url>'
+          generated['generatedBy']['schemaRegistryUrl'] = '<registry-url>'
+          if committed != generated:
+              raise SystemExit('generated fixtures differ from immutable artifact')
+          PY
+          ./gradlew verifyConfluentBackwardCompatibility -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
+          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 9
+          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
+            encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$encoded_subject" | jq -r '.compatibilityLevel')" = BACKWARD
+          done
+          jq -r '.cases[].topic' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
+            for contract_topic in "$topic" "$topic.DLQ"; do
+              docker exec "${{ job.services.kafka.id }}" kafka-topics --bootstrap-server kafka:29092 \
+                --create --if-not-exists --topic "$contract_topic" --partitions 1 --replication-factor 1
+            done
+          done
+
+      - name: Snapshot seeded Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/registry-before evidence/registry-after
+          curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-before/subjects.json
+          jq -r '.[]' evidence/registry-before/subjects.json | while read -r subject; do
+            encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-before/$subject.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-before/$subject.schema.json"
+          done
+
+      - name: Java publishes and Go consumes all fixtures
+        id: java_to_go
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GYM_PROTO_FIXTURE_PATH: ${{ github.workspace }}/gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/logs
+          (cd common-java && ./gradlew foundationMatrixProduce --no-daemon) 2>&1 | tee evidence/logs/java-matrix-produce.log
+          (cd common-go && go test -tags=integration -race -run '^TestGivenJavaPublishedMatrix_WhenGoConsumes_ThenVerifiesEveryFixture$' .) 2>&1 | tee evidence/logs/go-matrix-consume.log
+
+      - name: Go publishes and Java consumes all fixtures
+        id: go_to_java
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GYM_PROTO_FIXTURE_PATH: ${{ github.workspace }}/gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json
+        run: |
+          set -euo pipefail
+          (cd common-go && go test -tags=integration -race -run '^TestGivenMatrixRun_WhenGoPublishes_ThenWritesEveryFixtureForJava$' .) 2>&1 | tee evidence/logs/go-matrix-produce.log
+          (cd common-java && ./gradlew foundationMatrixConsume --no-daemon) 2>&1 | tee evidence/logs/java-matrix-consume.log
+
+      - name: Run delivery failure matrix
+        id: delivery_failures
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GYM_PROTO_FIXTURE_PATH: ${{ github.workspace }}/gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json
+          FOUNDATION_MATRIX_RUN_ID: ""
+        run: |
+          set -euo pipefail
+          (cd common-java && ./gradlew kafkaContractIntegration --no-daemon) 2>&1 | tee evidence/logs/java-delivery-failures.log
+          (cd common-go && go test -tags=integration -race ./...) 2>&1 | tee evidence/logs/go-delivery-failures.log
+
+      - name: Verify Registry remained immutable
+        id: registry_immutable
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-after/subjects.json
+          jq -r '.[]' evidence/registry-after/subjects.json | while read -r subject; do
+            encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-after/$subject.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-after/$subject.schema.json"
+          done
+          diff -ru evidence/registry-before evidence/registry-after
+
+      - name: Create sanitized matrix evidence
+        if: always()
+        shell: bash
+        env:
+          COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
+          COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
+          COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
+          COMMON_GO_REF: ${{ inputs.common_go_ref }}
+          COMMON_GO_SHA: ${{ inputs.common_go_sha }}
+          COMMON_GO_VERSION: ${{ inputs.common_go_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          status="${{ job.status }}"
+          java_to_go="${{ steps.java_to_go.outcome }}"
+          go_to_java="${{ steps.go_to_java.outcome }}"
+          delivery_failures="${{ steps.delivery_failures.outcome }}"
+          registry_check="${{ steps.registry_immutable.outcome }}"
+          registry_mutation="not-checked"
+          [[ "$java_to_go" == "success" ]] && java_to_go="pass"
+          [[ "$go_to_java" == "success" ]] && go_to_java="pass"
+          [[ "$delivery_failures" == "success" ]] && delivery_failures="pass"
+          [[ "$registry_check" == "success" ]] && registry_mutation="none"
+          jq -n \
+            --arg gymProto "$GYM_PROTO_TAG" --arg gymProtoSha "$GYM_PROTO_SHA" \
+            --arg protoGo "$PROTO_GO_VERSION" --arg protoGoSha "$PROTO_GO_SHA" \
+            --arg commonJava "$COMMON_JAVA_VERSION" --arg commonJavaRef "$COMMON_JAVA_REF" --arg commonJavaSha "$COMMON_JAVA_SHA" \
+            --arg commonGo "$COMMON_GO_VERSION" --arg commonGoRef "$COMMON_GO_REF" --arg commonGoSha "$COMMON_GO_SHA" \
+            --arg fixtureSha256 "$FIXTURE_SHA256" --arg status "$status" \
+            --arg javaToGo "$java_to_go" --arg goToJava "$go_to_java" \
+            --arg deliveryFailures "$delivery_failures" --arg registryMutation "$registry_mutation" \
+            --arg runUrl "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --argjson runId "$GITHUB_RUN_ID" --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            '{gymProto:$gymProto,gymProtoSha:$gymProtoSha,protoGo:$protoGo,protoGoSha:$protoGoSha,
+              commonJava:$commonJava,commonJavaCandidateRef:$commonJavaRef,commonJavaSha:$commonJavaSha,
+              commonGo:$commonGo,commonGoCandidateRef:$commonGoRef,commonGoSha:$commonGoSha,
+              kafka:"confluentinc/cp-kafka:7.7.1",schemaRegistry:"confluentinc/cp-schema-registry:7.7.1",
+              fixtureSha256:$fixtureSha256,fixtureCases:9,status:$status,javaToGo:$javaToGo,goToJava:$goToJava,
+              retryCommitDlq:$deliveryFailures,registryMutation:$registryMutation,
+              workflowRunUrl:$runUrl,workflowRunId:$runId,workflowRunAttempt:$runAttempt,ownerApproval:"pending"}' \
+            > evidence/cross-language-matrix.json
+          jq -n \
+            --arg status "$delivery_failures" \
+            '{status:$status,retryPolicy:{attempts:4,delaysSeconds:[2,4,8]},
+              proofs:["retry-before-commit","permanent-failure-to-dlq","no-commit-on-dlq-failure","same-group-redelivery","cancellation-redelivery","no-later-offset-past-incomplete-record"],
+              retryTimestamps:"not-captured",offsets:"not-captured",restartRedelivery:"covered-by-same-group-tests",
+              junitReports:["common-java/build/test-results/kafkaContractIntegration"],
+              commandLogs:["evidence/logs/java-delivery-failures.log","evidence/logs/go-delivery-failures.log"],
+              goCommand:"go test -tags=integration -race ./..."}' \
+            > evidence/retry-dlq-transcript.json
+          : > evidence/raw-frame-checksums.jsonl
+          jq -c '.cases[]' gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r fixture; do
+            topic="$(jq -r '.topic' <<<"$fixture")"
+            key_hash="$(printf '%s' "$(jq -r '.keyUtf8' <<<"$fixture")" | sha256sum | cut -d ' ' -f1)"
+            frame_hash="$(jq -r '.frame.completeHex' <<<"$fixture" | xxd -r -p | sha256sum | cut -d ' ' -f1)"
+            jq -cn --arg topic "$topic" --arg key "$key_hash" --arg canonicalFrame "$frame_hash" \
+              '{topic:$topic,keySha256:$key,canonicalFrameSha256:$canonicalFrame}' \
+              >> evidence/raw-frame-checksums.jsonl
+          done
+          jq -s . evidence/raw-frame-checksums.jsonl > evidence/raw-frame-checksums.json
+          rm evidence/raw-frame-checksums.jsonl
+          (cd common-go && go list -m -json all) > evidence/go-dependencies.json
+          if [[ -d common-java ]]; then
+            (cd common-java && ./gradlew dependencies --configuration runtimeClasspath --no-daemon) > evidence/java-dependencies.txt
+          fi
+          sha256sum common-go/go.mod common-go/go.sum > evidence/go-module.sha256
+          sha256sum common-java/build/libs/*.jar > evidence/java-artifacts.sha256 2>/dev/null || true
+          sha256sum common-java/build/publications/gpr/pom-default.xml > evidence/java-pom.sha256 2>/dev/null || true
+          sha256sum evidence/*.json evidence/*.txt evidence/*.sha256 2>/dev/null > evidence/manifest.sha256 || true
+
+      - name: Upload matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: foundation-rc-matrix-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            evidence/
+            common-java/build/test-results/
+          if-no-files-found: error
+          retention-days: 90

@@ -1,50 +1,182 @@
-name: Validate Release Candidate
+name: Publish Go Release Candidate
 
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      candidate_ref:
+        description: Immutable common-go candidate tag
+        required: true
+        default: candidate/v0.3.0-rc.1
+      candidate_sha:
+        description: Matrix-tested common-go commit SHA
+        required: true
+      common_java_ref:
+        description: Immutable common-java candidate tag
+        required: true
+        default: candidate/v2.0.0-rc.1
+      common_java_sha:
+        description: Matrix-tested common-java commit SHA
+        required: true
+      common_java_version:
+        description: Matrix-tested common-java RC version
+        required: true
+        default: 2.0.0-rc.1
+      release_version:
+        description: Go module RC version
+        required: true
+        default: v0.3.0-rc.1
+      matrix_run_id:
+        description: Successful Foundation RC Matrix run ID
+        required: true
 
 permissions:
   contents: read
 
+concurrency:
+  group: common-go-release-${{ inputs.release_version }}
+  cancel-in-progress: false
+
 jobs:
-  validate-release:
+  publish-release:
     runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      actions: read
+      contents: write
     steps:
+      - name: Validate immutable release inputs
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
+          COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
+          COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
+          MATRIX_RUN_ID: ${{ inputs.matrix_run_id }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          [[ "$CANDIDATE_REF" =~ ^candidate/v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMMON_JAVA_REF" =~ ^candidate/v2\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_JAVA_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$COMMON_JAVA_VERSION" =~ ^2\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$MATRIX_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          [[ "$RELEASE_VERSION" =~ ^v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          test "$CANDIDATE_REF" = "candidate/$RELEASE_VERSION"
+          test "$COMMON_JAVA_REF" = "candidate/v$COMMON_JAVA_VERSION"
+
+      - name: Verify authoritative matrix evidence
+        shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
+          COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
+          COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MATRIX_RUN_ID: ${{ inputs.matrix_run_id }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          api=https://api.github.com/repos/pploc/common-go
+          run="$(curl --fail --silent --show-error "$api/actions/runs/$MATRIX_RUN_ID")"
+          jq -e --argjson id "$MATRIX_RUN_ID" '
+            .id == $id and .repository.full_name == "pploc/common-go"
+            and .head_repository.full_name == "pploc/common-go"
+            and .head_branch == "develop" and .event == "workflow_dispatch"
+            and .path == ".github/workflows/foundation-rc-matrix.yml"
+            and .status == "completed" and .conclusion == "success"
+          ' <<<"$run" >/dev/null
+          attempt="$(jq -r '.run_attempt' <<<"$run")"
+          workflow_sha="$(jq -r '.head_sha' <<<"$run")"
+          artifact_name="foundation-rc-matrix-$MATRIX_RUN_ID-$attempt"
+          artifacts="$(curl --fail --silent --show-error "$api/actions/runs/$MATRIX_RUN_ID/artifacts?per_page=100")"
+          artifact="$(jq -ce --arg name "$artifact_name" --arg sha "$workflow_sha" --argjson id "$MATRIX_RUN_ID" '
+            [.artifacts[] | select(.name == $name and .expired == false and .workflow_run.id == $id and .workflow_run.head_sha == $sha)] | if length == 1 then .[0] else error("expected one retained matrix artifact") end
+          ' <<<"$artifacts")"
+          artifact_id="$(jq -r '.id' <<<"$artifact")"
+          artifact_digest="$(jq -r '.digest | sub("^sha256:"; "")' <<<"$artifact")"
+          gh api "repos/pploc/common-go/actions/artifacts/$artifact_id/zip" > matrix.zip
+          test "$(sha256sum matrix.zip | cut -d ' ' -f1)" = "$artifact_digest"
+          mkdir matrix
+          unzip -q matrix.zip -d matrix
+          jq -e \
+            --arg goRef "$CANDIDATE_REF" --arg goSha "$CANDIDATE_SHA" --arg goVersion "$RELEASE_VERSION" \
+            --arg javaRef "$COMMON_JAVA_REF" --arg javaSha "$COMMON_JAVA_SHA" --arg javaVersion "$COMMON_JAVA_VERSION" \
+            --argjson runId "$MATRIX_RUN_ID" --argjson attempt "$attempt" '
+              .workflowRunId == $runId and .workflowRunAttempt == $attempt
+              and .commonGoCandidateRef == $goRef and .commonGoSha == $goSha and .commonGo == $goVersion
+              and .commonJavaCandidateRef == $javaRef and .commonJavaSha == $javaSha and .commonJava == $javaVersion
+              and .status == "success" and .javaToGo == "pass" and .goToJava == "pass"
+              and .retryCommitDlq == "pass" and .registryMutation == "none"
+            ' matrix/cross-language-matrix.json >/dev/null
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ inputs.candidate_ref }}
+
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.x"
-          check-latest: true
-      - name: Validate immutable tag version
+          go-version: "1.26.5"
+          check-latest: false
+
+      - name: Bind candidate and refuse tag reuse
         shell: bash
+        env:
+          CANDIDATE_REF: ${{ inputs.candidate_ref }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
-          version="${GITHUB_REF#refs/tags/v}"
-          test -n "$version"
-          test "$(git tag --points-at HEAD | grep -Fx "v$version")" = "v$version"
+          test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+          test "$(git rev-parse "$CANDIDATE_REF^{commit}")" = "$CANDIDATE_SHA"
           test -z "$(go list -m -json | jq -r '.Replace // empty')"
+          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+            printf 'Release tag %s already exists\n' "$RELEASE_VERSION" >&2
+            exit 1
+          fi
+
       - name: Install analysis tools
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
           go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+
       - name: Verify source
         run: make verify
+
       - name: Create provenance report
         shell: bash
+        env:
+          MATRIX_RUN_ID: ${{ inputs.matrix_run_id }}
         run: |
           set -euo pipefail
           mkdir -p evidence
           go list -m -json all > evidence/dependencies.json
           git rev-parse HEAD > evidence/source-sha.txt
+          printf '%s\n' "$MATRIX_RUN_ID" > evidence/matrix-run-id.txt
           sha256sum go.mod go.sum > evidence/module.sha256
+
+      - name: Create immutable RC tag and GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git tag -a "$RELEASE_VERSION" -m "common-go $RELEASE_VERSION"
+          git push origin "refs/tags/$RELEASE_VERSION"
+          gh release create "$RELEASE_VERSION" \
+            --verify-tag \
+            --title "common-go $RELEASE_VERSION" \
+            --notes "Foundation RC validated by matrix run ${{ inputs.matrix_run_id }}. Owner approvals remain pending."
+
       - uses: actions/upload-artifact@v4
         with:
-          name: common-go-release-evidence-${{ github.sha }}
+          name: common-go-release-evidence-${{ inputs.candidate_sha }}
           path: evidence/
-
-  kafka-contract-integration:
-    needs: validate-release
-    uses: ./.github/workflows/kafka-contract-integration.yml
+          if-no-files-found: error
+          retention-days: 90

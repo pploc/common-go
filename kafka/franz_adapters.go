@@ -15,6 +15,7 @@ type FranzProducer struct {
 	producer *franz.Producer
 	encoder  FrameEncoder
 	timeout  time.Duration
+	clock    func() time.Time
 }
 
 // NewFranzProducer creates an acknowledged all-ISR/idempotent producer. The
@@ -30,19 +31,23 @@ func NewFranzProducer(config TransportConfig, encoder FrameEncoder) (*FranzProdu
 	if err != nil {
 		return nil, err
 	}
-	return &FranzProducer{producer: producer, encoder: encoder, timeout: config.PublishTimeout}, nil
+	clock := config.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	return &FranzProducer{producer: producer, encoder: encoder, timeout: config.PublishTimeout, clock: clock}, nil
 }
 
 // Publish validates the frozen topic/type pair, builds canonical metadata, and
 // waits for broker acknowledgement of the complete Confluent-framed value.
 func (p *FranzProducer) Publish(ctx context.Context, event Event) error {
-	if p == nil || p.producer == nil || p.encoder == nil {
+	if p == nil || p.producer == nil || p.encoder == nil || p.clock == nil {
 		return fmt.Errorf("kafka: producer is not initialized")
 	}
 	if err := ValidateEvent(event); err != nil {
 		return err
 	}
-	headers, err := CanonicalHeaders(ctx, event.Payload, event.Source, event.EventID, time.Now(), event.Headers)
+	headers, err := CanonicalHeaders(ctx, event.Payload, event.Source, event.EventID, p.clock(), event.Headers)
 	if err != nil {
 		return err
 	}

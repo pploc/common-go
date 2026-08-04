@@ -6,7 +6,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pploc/common-go/observability"
 	eventsv1 "github.com/pploc/proto-go/events/v1"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/trace"
+	"google.golang.org/grpc/metadata"
 )
 
 type recordingSleeper struct{ delays []time.Duration }
@@ -68,6 +73,61 @@ func TestGivenCanonicalMetadata_WhenBuildingHeaders_ThenIncludesW3CAndRejectsOve
 	}
 	if _, err := CanonicalHeaders(context.Background(), &eventsv1.UserRegisteredEvent{}, "source", "id", time.Now(), []Header{{Key: "EVENT-ID", Value: []byte("override")}}); err == nil {
 		t.Fatal("expected canonical header override rejection")
+	}
+}
+
+func TestGivenW3CParent_WhenBuildingHeaders_ThenPreservesTraceparentAndTracestate(t *testing.T) {
+	// Given
+	previous := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+	traceState, err := trace.TraceState{}.Insert("vendor", "value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	spanContext := trace.NewSpanContext(trace.SpanContextConfig{
+		TraceID:    trace.TraceID{0x0a, 0xf7, 0x65, 0x19, 0x16, 0xcd, 0x43, 0xdd, 0x84, 0x48, 0xeb, 0x21, 0x1c, 0x80, 0x31, 0x9c},
+		SpanID:     trace.SpanID{0xb7, 0xad, 0x6b, 0x71, 0x69, 0x20, 0x33, 0x31},
+		TraceFlags: trace.FlagsSampled,
+		TraceState: traceState,
+	})
+	ctx := trace.ContextWithRemoteSpanContext(context.Background(), spanContext)
+
+	// When
+	headers, err := CanonicalHeaders(ctx, &eventsv1.UserRegisteredEvent{}, "identifier", "event-1", time.UnixMilli(1), nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := headerValue(headers, HeaderTraceParent); got != "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01" {
+		t.Fatalf("traceparent = %q", got)
+	}
+	if got := headerValue(headers, HeaderTraceState); got != "vendor=value" {
+		t.Fatalf("tracestate = %q", got)
+	}
+	if got := headerValue(headers, HeaderTraceID); got != "" {
+		t.Fatalf("x-trace-id = %q, want absent", got)
+	}
+}
+
+func TestGivenFallbackCorrelation_WhenBuildingHeaders_ThenEmitsTraceIDBesideNewW3CRoot(t *testing.T) {
+	// Given
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(HeaderTraceID, "legacy-trace"))
+	ctx = observability.ExtractIncoming(ctx)
+
+	// When
+	headers, err := CanonicalHeaders(ctx, &eventsv1.UserRegisteredEvent{}, "identifier", "event-1", time.UnixMilli(1), nil)
+
+	// Then
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := headerValue(headers, HeaderTraceID); got != "legacy-trace" {
+		t.Fatalf("x-trace-id = %q", got)
+	}
+	if got := headerValue(headers, HeaderTraceParent); got == "" {
+		t.Fatal("traceparent is missing")
 	}
 }
 
