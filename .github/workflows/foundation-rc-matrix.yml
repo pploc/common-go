@@ -153,7 +153,7 @@ jobs:
           proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
           assert_equal proto_go_version "$PROTO_GO_VERSION" "$(jq -r '.Version' <<<"$proto_module")"
           assert_equal proto_go_replace "" "$(jq -r '.Replace // empty' <<<"$proto_module")"
-          grep -Eq "^github.com/pploc/proto-go v${PROTO_GO_VERSION} h1:" common-go/go.sum || {
+          grep -Eq "^github.com/pploc/proto-go ${PROTO_GO_VERSION} h1:" common-go/go.sum || {
             printf 'proto_go_checksum missing from go.sum\n' >&2
             exit 1
           }
