@@ -142,7 +142,7 @@ jobs:
           test "$(git -C gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
           test "$(git -C gym-proto rev-parse 'v1.1.0^{commit}')" = "$GYM_PROTO_SHA"
           test "$(sha256sum gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$FIXTURE_SHA256"
-          test "$(jq -r '.technicalEvidence.protoGoSha' gym-proto/contracts/v1/manifest.json)" = "$PROTO_GO_SHA"
+          test "$(git ls-remote https://github.com/pploc/proto-go.git "refs/tags/${PROTO_GO_VERSION}^{}" | cut -f1)" = "$PROTO_GO_SHA"
           proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
           test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_GO_VERSION"
           test "$(jq -r '.Replace // empty' <<<"$proto_module")" = ""
