@@ -146,7 +146,7 @@ jobs:
           proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
           test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_GO_VERSION"
           test "$(jq -r '.Replace // empty' <<<"$proto_module")" = ""
-          test "$(jq -r '.Sum' <<<"$proto_module")" != ""
+          grep -Eq "^github.com/pploc/proto-go v${PROTO_GO_VERSION} h1:" common-go/go.sum
 
       - name: Install Go verification tools
         run: |
