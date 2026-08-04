@@ -254,7 +254,7 @@ jobs:
           GYM_PROTO_FIXTURE_PATH: ${{ github.workspace }}/gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json
         run: |
           set -euo pipefail
-          (cd common-go && go test -tags=integration -race -run '^TestGivenMatrixRun_WhenGoPublishes_ThenWritesEveryFixtureForJava$' .) 2>&1 | tee evidence/logs/go-matrix-produce.log
+          (cd common-go && go test -v -tags=integration -race -run '^TestGivenMatrixRun_WhenGoPublishes_ThenWritesEveryFixtureForJava$' .) 2>&1 | tee evidence/logs/go-matrix-produce.log
           (cd common-java && ./gradlew foundationMatrixConsume --no-daemon) 2>&1 | tee evidence/logs/java-matrix-consume.log
 
       - name: Run delivery failure matrix
