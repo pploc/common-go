@@ -125,8 +125,10 @@ jobs:
           kafka_container="$(docker ps --filter 'ancestor=confluentinc/cp-kafka:7.7.1' --format '{{.ID}}')"
           test -n "$kafka_container"
           jq -r '.cases[].topic' gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
-            docker exec "$kafka_container" kafka-topics --bootstrap-server kafka:29092 \
-              --create --if-not-exists --topic "$topic" --partitions 1 --replication-factor 1
+            for contract_topic in "$topic" "$topic.DLQ"; do
+              docker exec "$kafka_container" kafka-topics --bootstrap-server kafka:29092 \
+                --create --if-not-exists --topic "$contract_topic" --partitions 1 --replication-factor 1
+            done
           done
 
       - name: Run real Kafka and Schema Registry contract tests
