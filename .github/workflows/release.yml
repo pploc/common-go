@@ -10,6 +10,10 @@ on:
       candidate_sha:
         description: Matrix-tested common-go commit SHA
         required: true
+      candidate_version:
+        description: Matrix-tested common-go RC version
+        required: true
+        default: v0.3.0-rc.1
       common_java_ref:
         description: Immutable common-java candidate tag
         required: true
@@ -22,7 +26,7 @@ on:
         required: true
         default: 2.0.0-rc.1
       release_version:
-        description: Go module RC version
+        description: Go module release version
         required: true
         default: v0.3.0-rc.1
       matrix_run_id:
@@ -49,6 +53,7 @@ jobs:
         env:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
           COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
           COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
@@ -58,12 +63,16 @@ jobs:
           set -euo pipefail
           [[ "$CANDIDATE_REF" =~ ^candidate/v0\.3\.0-rc\.[1-9][0-9]*$ ]]
           [[ "$CANDIDATE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_VERSION" =~ ^v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          test "$CANDIDATE_REF" = "candidate/$CANDIDATE_VERSION"
           [[ "$COMMON_JAVA_REF" =~ ^candidate/v2\.0\.0-rc\.[1-9][0-9]*$ ]]
           [[ "$COMMON_JAVA_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$COMMON_JAVA_VERSION" =~ ^2\.0\.0-rc\.[1-9][0-9]*$ ]]
           [[ "$MATRIX_RUN_ID" =~ ^[1-9][0-9]*$ ]]
-          [[ "$RELEASE_VERSION" =~ ^v0\.3\.0-rc\.[1-9][0-9]*$ ]]
-          test "$CANDIDATE_REF" = "candidate/$RELEASE_VERSION"
+          [[ "$RELEASE_VERSION" =~ ^v0\.3\.0(-rc\.[1-9][0-9]*)?$ ]]
+          if [[ "$RELEASE_VERSION" == *-rc.* ]]; then
+            test "$CANDIDATE_REF" = "candidate/$RELEASE_VERSION"
+          fi
           test "$COMMON_JAVA_REF" = "candidate/v$COMMON_JAVA_VERSION"
 
       - name: Verify authoritative matrix evidence
@@ -71,6 +80,7 @@ jobs:
         env:
           CANDIDATE_REF: ${{ inputs.candidate_ref }}
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          CANDIDATE_VERSION: ${{ inputs.candidate_version }}
           COMMON_JAVA_REF: ${{ inputs.common_java_ref }}
           COMMON_JAVA_SHA: ${{ inputs.common_java_sha }}
           COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
@@ -102,7 +112,7 @@ jobs:
           mkdir matrix
           unzip -q matrix.zip -d matrix
           jq -e \
-            --arg goRef "$CANDIDATE_REF" --arg goSha "$CANDIDATE_SHA" --arg goVersion "$RELEASE_VERSION" \
+            --arg goRef "$CANDIDATE_REF" --arg goSha "$CANDIDATE_SHA" --arg goVersion "$CANDIDATE_VERSION" \
             --arg javaRef "$COMMON_JAVA_REF" --arg javaSha "$COMMON_JAVA_SHA" --arg javaVersion "$COMMON_JAVA_VERSION" \
             --argjson runId "$MATRIX_RUN_ID" --argjson attempt "$attempt" '
               .workflowRunId == $runId and .workflowRunAttempt == $attempt
@@ -158,7 +168,7 @@ jobs:
           printf '%s\n' "$MATRIX_RUN_ID" > evidence/matrix-run-id.txt
           sha256sum go.mod go.sum > evidence/module.sha256
 
-      - name: Create immutable RC tag and GitHub release
+      - name: Create immutable tag and GitHub release
         shell: bash
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -172,7 +182,7 @@ jobs:
           gh release create "$RELEASE_VERSION" \
             --verify-tag \
             --title "common-go $RELEASE_VERSION" \
-            --notes "Foundation RC validated by matrix run ${{ inputs.matrix_run_id }}. Owner approvals remain pending."
+            --notes "Foundation release validated from ${{ inputs.candidate_version }} by matrix run ${{ inputs.matrix_run_id }}."
 
       - uses: actions/upload-artifact@v4
         with:
