@@ -143,9 +143,13 @@ jobs:
           test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
           test "$(git rev-parse "$CANDIDATE_REF^{commit}")" = "$CANDIDATE_SHA"
           test -z "$(go list -m -json | jq -r '.Replace // empty')"
-          if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
-            printf 'Release tag %s already exists\n' "$RELEASE_VERSION" >&2
-            exit 1
+          if [[ "$RELEASE_VERSION" == *-rc.* ]]; then
+            if git ls-remote --exit-code --tags origin "refs/tags/$RELEASE_VERSION" >/dev/null 2>&1; then
+              printf 'Release tag %s already exists\n' "$RELEASE_VERSION" >&2
+              exit 1
+            fi
+          else
+            test "$(git ls-remote origin "refs/tags/$RELEASE_VERSION^{}" | cut -f1)" = "$CANDIDATE_SHA"
           fi
 
       - name: Install analysis tools
@@ -168,10 +172,10 @@ jobs:
           printf '%s\n' "$MATRIX_RUN_ID" > evidence/matrix-run-id.txt
           sha256sum go.mod go.sum > evidence/module.sha256
 
-      - name: Create immutable tag and GitHub release
+      - name: Create RC tag
+        if: contains(inputs.release_version, '-rc.')
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_VERSION: ${{ inputs.release_version }}
         run: |
           set -euo pipefail
@@ -179,6 +183,13 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git tag -a "$RELEASE_VERSION" -m "common-go $RELEASE_VERSION"
           git push origin "refs/tags/$RELEASE_VERSION"
+
+      - name: Create GitHub release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
           gh release create "$RELEASE_VERSION" \
             --verify-tag \
             --title "common-go $RELEASE_VERSION" \
