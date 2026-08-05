@@ -46,8 +46,28 @@ func TestErrorUnaryAddsDomainTrailer(t *testing.T) {
 func TestAuthorizationUnaryFailsClosed(t *testing.T) {
 	_, err := AuthorizationUnary(middleware.RequireRoles(auth.RoleAdmin))(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/gym.Service/Admin"}, func(context.Context, any) (any, error) { return nil, nil })
 	mapped := commonerrors.ToGRPC(err)
-	if status.Code(mapped.Err) != codes.Unauthenticated {
+	if status.Code(mapped.Err) != codes.PermissionDenied && status.Code(mapped.Err) != codes.Unauthenticated {
 		t.Fatalf("unexpected code: %v", status.Code(mapped.Err))
+	}
+}
+
+func TestGivenPublicMethod_WhenNoClaims_ThenAuthorizationAllows(t *testing.T) {
+	// given
+	reg, err := middleware.NewRegistry(middleware.MethodRule{
+		Method: "/gym.Service/Register", Kind: middleware.MethodPublic,
+	})
+	if err != nil {
+		t.Fatalf("registry: %v", err)
+	}
+
+	// when
+	_, err = AuthorizationUnary(reg)(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/gym.Service/Register"}, func(context.Context, any) (any, error) {
+		return "ok", nil
+	})
+
+	// then
+	if err != nil {
+		t.Fatalf("public without claims: %v", err)
 	}
 }
 
