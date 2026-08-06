@@ -30,6 +30,7 @@ func TestGivenFrozenTopicTypePairs_WhenValidatingMessages_ThenAcceptsOnlyMatchin
 		{"identity.user.registered.v1", &eventsv1.UserRegisteredEvent{}},
 		{"identity.user.suspended.v1", &eventsv1.UserSuspendedEvent{}},
 		{"identity.user.role-changed.v1", &eventsv1.UserRoleChangedEvent{}},
+			{"identity.email.verification-requested.v1", &eventsv1.EmailVerificationRequestedEvent{}},
 		{"payment.completed.v1", &eventsv1.PaymentCompletedEvent{}},
 		{"membership.activated.v1", &eventsv1.MembershipActivatedEvent{}},
 		{"membership.paused.v1", &eventsv1.MembershipPausedEvent{}},

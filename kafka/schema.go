@@ -50,15 +50,16 @@ func ValidateEvent(event Event) error {
 }
 
 var frozenTopicTypes = map[string]string{
-	"identity.user.registered.v1":   "events.v1.UserRegisteredEvent",
-	"identity.user.suspended.v1":    "events.v1.UserSuspendedEvent",
-	"identity.user.role-changed.v1": "events.v1.UserRoleChangedEvent",
-	"payment.completed.v1":          "events.v1.PaymentCompletedEvent",
-	"membership.activated.v1":       "events.v1.MembershipActivatedEvent",
-	"membership.paused.v1":          "events.v1.MembershipPausedEvent",
-	"membership.resumed.v1":         "events.v1.MembershipResumedEvent",
-	"membership.expiring-soon.v1":   "events.v1.MembershipExpiringSoonEvent",
-	"membership.expired.v1":         "events.v1.MembershipExpiredEvent",
+	"identity.user.registered.v1":              "events.v1.UserRegisteredEvent",
+	"identity.user.suspended.v1":               "events.v1.UserSuspendedEvent",
+	"identity.user.role-changed.v1":            "events.v1.UserRoleChangedEvent",
+	"identity.email.verification-requested.v1": "events.v1.EmailVerificationRequestedEvent",
+	"payment.completed.v1":                     "events.v1.PaymentCompletedEvent",
+	"membership.activated.v1":                  "events.v1.MembershipActivatedEvent",
+	"membership.paused.v1":                     "events.v1.MembershipPausedEvent",
+	"membership.resumed.v1":                    "events.v1.MembershipResumedEvent",
+	"membership.expiring-soon.v1":              "events.v1.MembershipExpiringSoonEvent",
+	"membership.expired.v1":                    "events.v1.MembershipExpiredEvent",
 }
 
 func validateFrozenPair(topic string, message proto.Message) error {
