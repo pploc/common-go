@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"testing"
 
+	commonv1 "github.com/pploc/proto-go/common/v1"
 	eventsv1 "github.com/pploc/proto-go/events/v1"
 	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
@@ -30,14 +31,26 @@ func (r *recordingResolver) Resolve(topic string, schemaID int, indexes []int) (
 	return r.message, nil
 }
 
+func validUserRegisteredEvent() *eventsv1.UserRegisteredEvent {
+	return &eventsv1.UserRegisteredEvent{
+		UserId:       "user-001",
+		Email:        "user-001@example.test",
+		FullName:     "Fixture User",
+		Role:         commonv1.Role_ROLE_CUSTOMER,
+		AuthProvider: commonv1.AuthProvider_AUTH_PROVIDER_LOCAL,
+		Timestamp:    1_700_000_000_123,
+	}
+}
+
+
 func TestGivenValidConfluentRecord_WhenDecoding_ThenReturnsConcreteMessageAndPreservesRawRecord(t *testing.T) {
 	// Given
-	payload, err := proto.Marshal(&eventsv1.UserRegisteredEvent{})
+	payload, err := proto.Marshal(validUserRegisteredEvent())
 	if err != nil {
 		t.Fatalf("marshal protobuf payload: %v", err)
 	}
 	record := testRecord(confluentFrame(1, []int{1}, payload))
-	resolver := &recordingResolver{message: &eventsv1.UserRegisteredEvent{}}
+	resolver := &recordingResolver{message: validUserRegisteredEvent()}
 
 	// When
 	decoded, err := Decode(record, resolver)
@@ -59,8 +72,12 @@ func TestGivenValidConfluentRecord_WhenDecoding_ThenReturnsConcreteMessageAndPre
 
 func TestGivenMutableRawRecord_WhenDecoding_ThenReturnsDefensiveRawCopy(t *testing.T) {
 	// Given
-	record := testRecord(confluentFrame(1, []int{0}, nil))
-	resolver := &recordingResolver{message: &eventsv1.UserRegisteredEvent{}}
+	payload, err := proto.Marshal(validUserRegisteredEvent())
+	if err != nil {
+		t.Fatalf("marshal protobuf payload: %v", err)
+	}
+	record := testRecord(confluentFrame(1, []int{0}, payload))
+	resolver := &recordingResolver{message: validUserRegisteredEvent()}
 
 	// When
 	decoded, err := Decode(record, resolver)
@@ -101,7 +118,7 @@ func TestGivenInvalidFrameOrHeaders_WhenDecoding_ThenReturnsPermanentFailure(t *
 			record := mutate(testRecord(confluentFrame(1, []int{0}, nil)))
 
 			// When
-			_, err := Decode(record, &recordingResolver{message: &eventsv1.UserRegisteredEvent{}})
+			_, err := Decode(record, &recordingResolver{message: validUserRegisteredEvent()})
 
 			// Then
 			if err == nil || !IsPermanent(err) {
@@ -150,7 +167,7 @@ func TestGivenEventTypeMismatchOrInvalidPayload_WhenDecoding_ThenReturnsPermanen
 	for name, record := range tests {
 		t.Run(name, func(t *testing.T) {
 			// Given
-			resolver := &recordingResolver{message: &eventsv1.UserRegisteredEvent{}}
+			resolver := &recordingResolver{message: validUserRegisteredEvent()}
 
 			// When
 			_, err := Decode(record, resolver)

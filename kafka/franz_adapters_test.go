@@ -7,7 +7,6 @@ import (
 	"time"
 
 	franz "github.com/pploc/common-go/internal/kafka"
-	eventsv1 "github.com/pploc/proto-go/events/v1"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -87,7 +86,7 @@ func TestGivenUninitializedFranzProducer_WhenPublishing_ThenReturnsInitializatio
 	producer := &FranzProducer{}
 	event := Event{
 		Topic:   "identity.user.registered.v1",
-		Payload: &eventsv1.UserRegisteredEvent{},
+		Payload: validUserRegisteredEvent(),
 		EventID: "event-1",
 		Source:  "identifier",
 	}

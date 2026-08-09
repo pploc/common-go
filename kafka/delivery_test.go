@@ -6,8 +6,18 @@ import (
 	"testing"
 	"time"
 
-	eventsv1 "github.com/pploc/proto-go/events/v1"
+	"google.golang.org/protobuf/proto"
+
 )
+
+
+func validUserRegisteredFrame() []byte {
+	payload, err := proto.Marshal(validUserRegisteredEvent())
+	if err != nil {
+		panic(err)
+	}
+	return confluentFrame(1, []int{0}, payload)
+}
 
 type recordingRawPublisher struct {
 	records []RawRecord
@@ -24,7 +34,7 @@ func TestGivenSuccessfulHandler_WhenProcessingDelivery_ThenCommitsWithoutPublish
 	publisher := &recordingRawPublisher{}
 	commits := 0
 	delivery := Delivery{
-		Resolver: &recordingResolver{message: &eventsv1.UserRegisteredEvent{}},
+		Resolver: &recordingResolver{message: validUserRegisteredEvent()},
 		Handler:  func(context.Context, DecodedRecord) error { return nil },
 		DLQ:      publisher,
 		Commit: func(context.Context, RawRecord) error {
@@ -34,7 +44,7 @@ func TestGivenSuccessfulHandler_WhenProcessingDelivery_ThenCommitsWithoutPublish
 	}
 
 	// When
-	err := delivery.Process(context.Background(), testRecord(confluentFrame(1, []int{0}, nil)))
+	err := delivery.Process(context.Background(), testRecord(validUserRegisteredFrame()))
 
 	// Then
 	if err != nil {
@@ -52,7 +62,7 @@ func TestGivenRetryableHandlerFailure_WhenRetriesExhaust_ThenPublishesDLQBeforeC
 	attempts := 0
 	commits := 0
 	delivery := Delivery{
-		Resolver: &recordingResolver{message: &eventsv1.UserRegisteredEvent{}},
+		Resolver: &recordingResolver{message: validUserRegisteredEvent()},
 		Handler: func(context.Context, DecodedRecord) error {
 			attempts++
 			return errors.New("temporary")
@@ -70,7 +80,7 @@ func TestGivenRetryableHandlerFailure_WhenRetriesExhaust_ThenPublishesDLQBeforeC
 	}
 
 	// When
-	err := delivery.Process(context.Background(), testRecord(confluentFrame(1, []int{0}, nil)))
+	err := delivery.Process(context.Background(), testRecord(validUserRegisteredFrame()))
 
 	// Then
 	if err != nil {
@@ -94,7 +104,7 @@ func TestGivenCanceledContext_WhenProcessingDelivery_ThenLeavesSourceUncommitted
 	publisher := &recordingRawPublisher{}
 	commits := 0
 	delivery := Delivery{
-		Resolver: &recordingResolver{message: &eventsv1.UserRegisteredEvent{}},
+		Resolver: &recordingResolver{message: validUserRegisteredEvent()},
 		Handler:  func(context.Context, DecodedRecord) error { return ctx.Err() },
 		DLQ:      publisher,
 		Commit: func(context.Context, RawRecord) error {
@@ -104,7 +114,7 @@ func TestGivenCanceledContext_WhenProcessingDelivery_ThenLeavesSourceUncommitted
 	}
 
 	// When
-	err := delivery.Process(ctx, testRecord(confluentFrame(1, []int{0}, nil)))
+	err := delivery.Process(ctx, testRecord(validUserRegisteredFrame()))
 
 	// Then
 	if !errors.Is(err, context.Canceled) {
@@ -120,7 +130,7 @@ func TestGivenPermanentFailure_WhenDLQPublicationFails_ThenLeavesSourceUncommitt
 	publisher := &recordingRawPublisher{err: errors.New("DLQ unavailable")}
 	commits := 0
 	delivery := Delivery{
-		Resolver: &recordingResolver{message: &eventsv1.UserRegisteredEvent{}},
+		Resolver: &recordingResolver{message: validUserRegisteredEvent()},
 		Handler:  func(context.Context, DecodedRecord) error { return Permanent{Err: errors.New("bad input")} },
 		DLQ:      publisher,
 		Commit: func(context.Context, RawRecord) error {
@@ -130,7 +140,7 @@ func TestGivenPermanentFailure_WhenDLQPublicationFails_ThenLeavesSourceUncommitt
 	}
 
 	// When
-	err := delivery.Process(context.Background(), testRecord(confluentFrame(1, []int{0}, nil)))
+	err := delivery.Process(context.Background(), testRecord(validUserRegisteredFrame()))
 
 	// Then
 	if err == nil {

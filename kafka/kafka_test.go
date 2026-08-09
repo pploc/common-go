@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/pploc/common-go/observability"
-	eventsv1 "github.com/pploc/proto-go/events/v1"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
@@ -64,14 +63,14 @@ func TestGivenRawRecord_WhenCreatingDLQRecord_ThenPreservesBytesAndReplacesContr
 }
 
 func TestGivenCanonicalMetadata_WhenBuildingHeaders_ThenIncludesW3CAndRejectsOverrides(t *testing.T) {
-	headers, err := CanonicalHeaders(context.Background(), &eventsv1.UserRegisteredEvent{}, "ms-gym-identifier", "event-1", time.UnixMilli(1), nil)
+	headers, err := CanonicalHeaders(context.Background(), validUserRegisteredEvent(), "ms-gym-identifier", "event-1", time.UnixMilli(1), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := ValidateCanonicalHeaders(headers); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := CanonicalHeaders(context.Background(), &eventsv1.UserRegisteredEvent{}, "source", "id", time.Now(), []Header{{Key: "EVENT-ID", Value: []byte("override")}}); err == nil {
+	if _, err := CanonicalHeaders(context.Background(), validUserRegisteredEvent(), "source", "id", time.Now(), []Header{{Key: "EVENT-ID", Value: []byte("override")}}); err == nil {
 		t.Fatal("expected canonical header override rejection")
 	}
 }
@@ -94,7 +93,7 @@ func TestGivenW3CParent_WhenBuildingHeaders_ThenPreservesTraceparentAndTracestat
 	ctx := trace.ContextWithRemoteSpanContext(context.Background(), spanContext)
 
 	// When
-	headers, err := CanonicalHeaders(ctx, &eventsv1.UserRegisteredEvent{}, "identifier", "event-1", time.UnixMilli(1), nil)
+	headers, err := CanonicalHeaders(ctx, validUserRegisteredEvent(), "identifier", "event-1", time.UnixMilli(1), nil)
 
 	// Then
 	if err != nil {
@@ -117,7 +116,7 @@ func TestGivenFallbackCorrelation_WhenBuildingHeaders_ThenEmitsTraceIDBesideNewW
 	ctx = observability.ExtractIncoming(ctx)
 
 	// When
-	headers, err := CanonicalHeaders(ctx, &eventsv1.UserRegisteredEvent{}, "identifier", "event-1", time.UnixMilli(1), nil)
+	headers, err := CanonicalHeaders(ctx, validUserRegisteredEvent(), "identifier", "event-1", time.UnixMilli(1), nil)
 
 	// Then
 	if err != nil {

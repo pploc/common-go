@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"strings"
 
+	"buf.build/go/protovalidate"
 	"google.golang.org/protobuf/proto"
 )
 
 // SubjectName returns the frozen TopicNameStrategy value subject.
 func SubjectName(topic string) (string, error) {
 	if _, ok := frozenTopicTypes[topic]; !ok {
-		return "", fmt.Errorf("kafka: topic %q is not part of the frozen v1 contract", topic)
+		return "", fmt.Errorf("kafka: topic %q is not part of the frozen kafka contract", topic)
 	}
 	return topic + "-value", nil
 }
@@ -45,6 +46,9 @@ func ValidateEvent(event Event) error {
 	}
 	if strings.TrimSpace(event.Source) == "" || strings.TrimSpace(event.EventID) == "" {
 		return fmt.Errorf("kafka: source and event ID are required")
+	}
+	if err := validateMessage(event.Payload); err != nil {
+		return Permanent{Err: err}
 	}
 	return nil
 }
@@ -81,3 +85,11 @@ func headerString(headers []Header, key string) (string, bool) {
 	}
 	return "", false
 }
+
+func validateMessage(message proto.Message) error {
+	if err := protovalidate.Validate(message); err != nil {
+		return fmt.Errorf("kafka: protobuf validation failed: %w", err)
+	}
+	return nil
+}
+

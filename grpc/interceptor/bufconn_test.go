@@ -64,7 +64,11 @@ func TestServerOptionsBufconnAuthAndTrailer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	grpcServer := grpc.NewServer(ServerOptions(AuthOptions{Claims: auth.DefaultOptions()}, policy, nil)...)
+	validator, err := NewValidator()
+	if err != nil {
+		t.Fatal(err)
+	}
+	grpcServer := grpc.NewServer(ServerOptions(AuthOptions{Claims: auth.DefaultOptions()}, policy, nil, validator)...)
 	grpcServer.RegisterService(&testServiceDesc, server)
 	go func() { _ = grpcServer.Serve(listener) }()
 	t.Cleanup(grpcServer.Stop)

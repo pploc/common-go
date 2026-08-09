@@ -43,6 +43,9 @@ func Decode(record RawRecord, resolver SchemaResolver) (DecodedRecord, error) {
 	if err := validateFrozenPair(record.Topic, message); err != nil {
 		return DecodedRecord{}, Permanent{Err: err}
 	}
+	if err := validateMessage(message); err != nil {
+		return DecodedRecord{}, Permanent{Err: err}
+	}
 	eventType, _ := headerString(record.Headers, HeaderEventType)
 	if eventType != string(message.ProtoReflect().Descriptor().FullName()) {
 		return DecodedRecord{}, Permanent{Err: fmt.Errorf("kafka: event-type does not match decoded protobuf descriptor")}
