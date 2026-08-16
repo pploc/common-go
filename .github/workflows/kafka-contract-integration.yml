@@ -152,7 +152,9 @@ jobs:
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/schema-registry-subjects.json || true
           if [[ -f evidence/schema-registry-subjects.json ]]; then
             jq -r '.[]' evidence/schema-registry-subjects.json | while read -r subject; do
-              curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -S . > "evidence/${subject}.compatibility.json" || true
+              encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+              subject_key="$(printf '%s' "$subject" | sha256sum | cut -d ' ' -f1)"
+              curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$encoded_subject" | jq -S . > "evidence/$subject_key.compatibility.json" || true
             done
           fi
 

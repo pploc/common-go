@@ -310,9 +310,10 @@ jobs:
               raise SystemExit('generated fixtures differ from immutable artifact')
           PY
           ./gradlew verifyConfluentBackwardCompatibility -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
-          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 11
-          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
+          # Protobuf import subjects are registered too; prove each frozen fixture subject instead of a total.
+          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" >/dev/null
             test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$encoded_subject" | jq -r '.compatibilityLevel')" = BACKWARD
           done
           jq -r '.cases[].topic' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
@@ -330,8 +331,9 @@ jobs:
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-before/subjects.json
           jq -r '.[]' evidence/registry-before/subjects.json | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-before/$subject.versions.json"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-before/$subject.schema.json"
+            subject_key="$(printf '%s' "$subject" | sha256sum | cut -d ' ' -f1)"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-before/$subject_key.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-before/$subject_key.schema.json"
           done
 
       - name: Java publishes and Go consumes all fixtures
@@ -377,8 +379,9 @@ jobs:
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-after/subjects.json
           jq -r '.[]' evidence/registry-after/subjects.json | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-after/$subject.versions.json"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-after/$subject.schema.json"
+            subject_key="$(printf '%s' "$subject" | sha256sum | cut -d ' ' -f1)"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-after/$subject_key.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-after/$subject_key.schema.json"
           done
           diff -ru evidence/registry-before evidence/registry-after
 
