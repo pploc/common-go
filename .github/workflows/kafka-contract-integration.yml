@@ -114,9 +114,11 @@ jobs:
           if committed != generated:
               raise SystemExit('generated Confluent fixtures differ from the immutable artifact')
           PY
-          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 11
-          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
-            test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -r '.compatibilityLevel')" = BACKWARD
+          # Protobuf import subjects are registered too; prove each frozen fixture subject instead of a total.
+          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r subject; do
+            encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" >/dev/null
+            test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$encoded_subject" | jq -r '.compatibilityLevel')" = BACKWARD
           done
 
       - name: Create immutable fixture topics
@@ -146,7 +148,7 @@ jobs:
           git rev-parse HEAD > evidence/source-sha.txt
           git -C ../gym-proto rev-parse HEAD > evidence/gym-proto-source-sha.txt
           go list -m -json github.com/pploc/proto-go > evidence/proto-go-module.json
-          sha256sum "$(go list -m -f '{{.Dir}}' github.com/pploc/proto-go)/contracts/v1/kafka/confluent-7.7.1-fixtures.json" > evidence/fixture.sha256
+          printf '%s\n' "$GYM_PROTO_FIXTURE_SHA256" > evidence/fixture.sha256
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/schema-registry-subjects.json || true
           if [[ -f evidence/schema-registry-subjects.json ]]; then
             jq -r '.[]' evidence/schema-registry-subjects.json | while read -r subject; do
