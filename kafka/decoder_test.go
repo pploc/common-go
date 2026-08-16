@@ -42,7 +42,6 @@ func validUserRegisteredEvent() *eventsv1.UserRegisteredEvent {
 	}
 }
 
-
 func TestGivenValidConfluentRecord_WhenDecoding_ThenReturnsConcreteMessageAndPreservesRawRecord(t *testing.T) {
 	// Given
 	payload, err := proto.Marshal(validUserRegisteredEvent())

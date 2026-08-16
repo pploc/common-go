@@ -132,11 +132,13 @@ func frozenMessages() []proto.Message {
 		&eventsv1.UserRegisteredEvent{},
 		&eventsv1.UserSuspendedEvent{},
 		&eventsv1.UserRoleChangedEvent{},
+		&eventsv1.EmailVerificationRequestedEvent{},
 		&eventsv1.PaymentCompletedEvent{},
 		&eventsv1.MembershipActivatedEvent{},
 		&eventsv1.MembershipPausedEvent{},
 		&eventsv1.MembershipResumedEvent{},
 		&eventsv1.MembershipExpiringSoonEvent{},
 		&eventsv1.MembershipExpiredEvent{},
+		&eventsv1.CheckInRecordedEvent{},
 	}
 }

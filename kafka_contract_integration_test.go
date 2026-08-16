@@ -293,8 +293,8 @@ func TestGivenMatrixRun_WhenGoPublishes_ThenWritesEveryFixtureForJava(t *testing
 	}
 
 	// Then
-	if len(publishedConfluentFixtures(t).Cases) != 9 {
-		t.Fatal("foundation matrix requires all nine canonical fixtures")
+	if len(publishedConfluentFixtures(t).Cases) != 11 {
+		t.Fatal("foundation matrix requires all eleven canonical fixtures")
 	}
 }
 

@@ -41,9 +41,10 @@ jobs:
     env:
       KAFKA_BROKERS: localhost:9092
       SCHEMA_REGISTRY_URL: http://localhost:8081
-      PROTO_VERSION: v1.1.0
-      GYM_PROTO_SHA: 740e476915117ab594a6e7ee3677e6a2c39c3c80
-      GYM_PROTO_FIXTURE_SHA256: e5a5d0944229c9e0c97dc5e872f01e7597993e5732f2014b7d8e5efdf965a27e
+      PROTO_VERSION: v1.7.1
+      GYM_PROTO_TAG: v7.0.2
+      GYM_PROTO_SHA: 8da83a33411d10442a854fe1d05d34356fe85643
+      GYM_PROTO_FIXTURE_SHA256: e79341b996d5052c0e0e4a0fe2621fd5edab6ad3b2d3a8304678664cbb46b4ab
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +53,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pploc/gym-proto
-          ref: v1.1.0
+          ref: v7.0.2
           path: gym-proto
           fetch-depth: 1
 
@@ -77,7 +78,7 @@ jobs:
           test "$(jq -r '.Version' <<<"$proto_module")" = "$PROTO_VERSION"
           test -z "$(jq -r '.Replace // empty' <<<"$proto_module")"
           test "$(git -C ../gym-proto rev-parse HEAD)" = "$GYM_PROTO_SHA"
-          test "$(git -C ../gym-proto rev-parse "${PROTO_VERSION}^{commit}")" = "$GYM_PROTO_SHA"
+          test "$(git -C ../gym-proto rev-parse "${GYM_PROTO_TAG}^{commit}")" = "$GYM_PROTO_SHA"
           test "$(sha256sum ../gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)" = "$GYM_PROTO_FIXTURE_SHA256"
 
       - name: Wait for Kafka and Schema Registry
@@ -113,7 +114,7 @@ jobs:
           if committed != generated:
               raise SystemExit('generated Confluent fixtures differ from the immutable artifact')
           PY
-          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 9
+          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 11
           jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
             test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$subject" | jq -r '.compatibilityLevel')" = BACKWARD
           done
