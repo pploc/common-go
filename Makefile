@@ -6,7 +6,8 @@ COVERAGE_MIN ?= 60
 .PHONY: fmt-check vet staticcheck test-race coverage tidy-check vulncheck integration verify
 
 fmt-check:
-	@test -z "$$(gofmt -l .)" || (gofmt -l .; exit 1)
+	@gofmt_files="$$(git ls-files -- '*.go')"; \
+	test -z "$$(gofmt -l $$gofmt_files)" || (gofmt -l $$gofmt_files; exit 1)
 
 vet:
 	go vet ./...
@@ -28,7 +29,8 @@ coverage:
 tidy-check:
 	go mod download
 	go mod verify
-	@test -z "$$(gofmt -l .)"
+	@gofmt_files="$$(git ls-files -- '*.go')"; \
+	test -z "$$(gofmt -l $$gofmt_files)" || (gofmt -l $$gofmt_files; exit 1)
 
 vulncheck:
 	govulncheck ./...

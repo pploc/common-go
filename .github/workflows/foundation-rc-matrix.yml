@@ -7,28 +7,29 @@ on:
       common_java_ref:
         description: Immutable non-SemVer common-java candidate tag
         required: true
-        default: candidate/v2.0.0-rc.1
+        default: candidate/v3.0.0-rc.1
       common_java_sha:
         description: Expected common-java commit SHA
         required: true
       common_go_ref:
         description: Immutable non-SemVer common-go candidate tag
         required: true
-        default: candidate/v0.3.0-rc.1
+        default: candidate/v0.5.0-rc.1
       common_go_sha:
         description: Expected common-go commit SHA
         required: true
       common_java_version:
         description: Intended Java RC version
         required: true
-        default: 2.0.0-rc.1
+        default: 3.0.0-rc.1
       common_go_version:
         description: Intended Go RC version
         required: true
-        default: v0.3.0-rc.1
+        default: v0.5.0-rc.1
 
 permissions:
   contents: read
+  packages: read
 
 jobs:
   foundation-rc-matrix:
@@ -65,11 +66,11 @@ jobs:
     env:
       KAFKA_BROKERS: localhost:9092
       SCHEMA_REGISTRY_URL: http://localhost:8081
-      GYM_PROTO_TAG: v1.1.0
-      GYM_PROTO_SHA: 740e476915117ab594a6e7ee3677e6a2c39c3c80
-      PROTO_GO_VERSION: v1.1.0
-      PROTO_GO_SHA: 6f070d25f8361e6550e0bd9a309a738d2a0dbd21
-      FIXTURE_SHA256: e5a5d0944229c9e0c97dc5e872f01e7597993e5732f2014b7d8e5efdf965a27e
+      GYM_PROTO_TAG: v7.0.2
+      GYM_PROTO_SHA: 8da83a33411d10442a854fe1d05d34356fe85643
+      PROTO_GO_VERSION: v1.7.1
+      PROTO_GO_SHA: 554827e0d065aac4cc04439513c8eca6b8b1a5f0
+      FIXTURE_SHA256: e79341b996d5052c0e0e4a0fe2621fd5edab6ad3b2d3a8304678664cbb46b4ab
       FOUNDATION_MATRIX_RUN_ID: foundation-${{ github.run_id }}-${{ github.run_attempt }}
       GITHUB_ACTOR: ${{ github.actor }}
     steps:
@@ -84,12 +85,12 @@ jobs:
           COMMON_GO_VERSION: ${{ inputs.common_go_version }}
         run: |
           set -euo pipefail
-          [[ "$COMMON_JAVA_REF" =~ ^candidate/v2\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_JAVA_REF" =~ ^candidate/v3\.0\.0-rc\.[1-9][0-9]*$ ]]
           [[ "$COMMON_JAVA_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$COMMON_GO_REF" =~ ^candidate/v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_GO_REF" =~ ^candidate/v0\.5\.0-rc\.[1-9][0-9]*$ ]]
           [[ "$COMMON_GO_SHA" =~ ^[0-9a-f]{40}$ ]]
-          [[ "$COMMON_JAVA_VERSION" =~ ^2\.0\.0-rc\.[1-9][0-9]*$ ]]
-          [[ "$COMMON_GO_VERSION" =~ ^v0\.3\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_JAVA_VERSION" =~ ^3\.0\.0-rc\.[1-9][0-9]*$ ]]
+          [[ "$COMMON_GO_VERSION" =~ ^v0\.5\.0-rc\.[1-9][0-9]*$ ]]
           test "$COMMON_JAVA_REF" = "candidate/v$COMMON_JAVA_VERSION"
           test "$COMMON_GO_REF" = "candidate/$COMMON_GO_VERSION"
 
@@ -110,13 +111,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: pploc/gym-proto
-          ref: v1.1.0
+          ref: v7.0.2
           path: gym-proto
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
+          go-version: "1.26.6"
           check-latest: false
 
       - uses: actions/setup-java@v4
@@ -146,8 +147,10 @@ jobs:
           assert_equal common_go_head "$EXPECTED_GO_SHA" "$(git -C common-go rev-parse HEAD)"
           assert_equal common_java_candidate "$EXPECTED_JAVA_SHA" "$(git -C common-java rev-parse "$EXPECTED_JAVA_REF^{commit}")"
           assert_equal common_go_candidate "$EXPECTED_GO_SHA" "$(git -C common-go rev-parse "$EXPECTED_GO_REF^{commit}")"
+          assert_equal common_java_release "$EXPECTED_JAVA_SHA" "$(git -C common-java rev-parse "v${{ inputs.common_java_version }}^{commit}")"
+          assert_equal common_go_release "$EXPECTED_GO_SHA" "$(git -C common-go rev-parse "${{ inputs.common_go_version }}^{commit}")"
           assert_equal gym_proto_head "$GYM_PROTO_SHA" "$(git -C gym-proto rev-parse HEAD)"
-          assert_equal gym_proto_tag "$GYM_PROTO_SHA" "$(git -C gym-proto rev-parse 'v1.1.0^{commit}')"
+          assert_equal gym_proto_tag "$GYM_PROTO_SHA" "$(git -C gym-proto rev-parse "${GYM_PROTO_TAG}^{commit}")"
           assert_equal fixture_sha256 "$FIXTURE_SHA256" "$(sha256sum gym-proto/contracts/v1/kafka/confluent-7.7.1-fixtures.json | cut -d ' ' -f1)"
           assert_equal proto_go_tag "$PROTO_GO_SHA" "$(git ls-remote https://github.com/pploc/proto-go.git "refs/tags/${PROTO_GO_VERSION}^{}" | cut -f1)"
           proto_module="$(cd common-go && go list -m -json github.com/pploc/proto-go)"
@@ -157,6 +160,103 @@ jobs:
             printf 'proto_go_checksum missing from go.sum\n' >&2
             exit 1
           }
+
+      - name: Resolve published Java RC in clean consumer
+        id: java_external_resolution
+        continue-on-error: true
+        shell: bash
+        env:
+          COMMON_JAVA_VERSION: ${{ inputs.common_java_version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test -n "$GITHUB_TOKEN"
+          mkdir -p evidence/logs
+          java_probe="$RUNNER_TEMP/java-rc-consumer"
+          rm -rf "$java_probe"
+          mkdir -p "$java_probe/src/main/java/probe"
+          cat > "$java_probe/settings.gradle" <<'EOF'
+          rootProject.name = 'common-java-rc-consumer'
+          EOF
+          cat > "$java_probe/build.gradle" <<EOF
+          plugins { id 'java' }
+          repositories {
+              mavenCentral()
+              maven {
+                  url = uri('https://packages.confluent.io/maven/')
+              }
+              maven {
+                  url = uri('https://maven.pkg.github.com/pploc/gym-proto')
+                  credentials {
+                      username = System.getenv('GITHUB_ACTOR')
+                      password = System.getenv('GITHUB_TOKEN')
+                  }
+              }
+              maven {
+                  url = uri('https://maven.pkg.github.com/pploc/common-java')
+                  credentials {
+                      username = System.getenv('GITHUB_ACTOR')
+                      password = System.getenv('GITHUB_TOKEN')
+                  }
+              }
+          }
+          dependencies { implementation 'com.gym:common-java:${COMMON_JAVA_VERSION}' }
+          EOF
+          cat > "$java_probe/src/main/java/probe/Probe.java" <<'EOF'
+          package probe;
+
+          import com.gym.common.error.CommonErrorCode;
+
+          final class Probe {
+              CommonErrorCode code = CommonErrorCode.INTERNAL_ERROR;
+          }
+          EOF
+          GRADLE_USER_HOME="$RUNNER_TEMP/java-rc-gradle-cache" \
+            common-java/gradlew --project-dir "$java_probe" --gradle-user-home "$RUNNER_TEMP/java-rc-gradle-cache" \
+            --refresh-dependencies clean compileJava --no-daemon \
+            2>&1 | tee evidence/logs/java-external-resolution.log
+
+      - name: Resolve published Go RC in clean consumer
+        id: go_external_resolution
+        continue-on-error: true
+        shell: bash
+        env:
+          COMMON_GO_VERSION: ${{ inputs.common_go_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p evidence/logs
+          go_probe="$RUNNER_TEMP/go-rc-consumer"
+          rm -rf "$go_probe"
+          mkdir -p "$go_probe"
+          cat > "$go_probe/go.mod" <<EOF
+          module example.com/common-go-rc-consumer
+
+          go 1.26
+
+          require github.com/pploc/common-go ${COMMON_GO_VERSION}
+          EOF
+          cat > "$go_probe/main.go" <<'EOF'
+          package main
+
+          import "github.com/pploc/common-go/auth"
+
+          func main() { _ = auth.DefaultOptions() }
+          EOF
+          export GOWORK=off
+          export GOPROXY=direct
+          export GONOSUMDB=github.com/pploc/*
+          export GOMODCACHE="$RUNNER_TEMP/go-rc-module-cache"
+          export GOCACHE="$RUNNER_TEMP/go-rc-build-cache"
+          (cd "$go_probe" && go mod download github.com/pploc/common-go@"$COMMON_GO_VERSION" \
+            && go mod tidy && go build ./... && go mod verify \
+            && test -z "$(go list -m -json github.com/pploc/common-go | jq -r '.Replace // empty')") \
+            2>&1 | tee evidence/logs/go-external-resolution.log
+
+      - name: Require published RC resolution
+        shell: bash
+        run: |
+          test "${{ steps.java_external_resolution.outcome }}" = success
+          test "${{ steps.go_external_resolution.outcome }}" = success
 
       - name: Install Go verification tools
         run: |
@@ -210,9 +310,10 @@ jobs:
               raise SystemExit('generated fixtures differ from immutable artifact')
           PY
           ./gradlew verifyConfluentBackwardCompatibility -PschemaRegistryUrl="$SCHEMA_REGISTRY_URL" --no-daemon
-          test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq length)" -eq 9
-          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | while read -r subject; do
+          # Protobuf import subjects are registered too; prove each frozen fixture subject instead of a total.
+          jq -r '.cases[].subject' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" >/dev/null
             test "$(curl --fail --silent "$SCHEMA_REGISTRY_URL/config/$encoded_subject" | jq -r '.compatibilityLevel')" = BACKWARD
           done
           jq -r '.cases[].topic' contracts/v1/kafka/confluent-7.7.1-fixtures.json | sort -u | while read -r topic; do
@@ -230,8 +331,9 @@ jobs:
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-before/subjects.json
           jq -r '.[]' evidence/registry-before/subjects.json | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-before/$subject.versions.json"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-before/$subject.schema.json"
+            subject_key="$(printf '%s' "$subject" | sha256sum | cut -d ' ' -f1)"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-before/$subject_key.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-before/$subject_key.schema.json"
           done
 
       - name: Java publishes and Go consumes all fixtures
@@ -277,8 +379,9 @@ jobs:
           curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects" | jq -S . > evidence/registry-after/subjects.json
           jq -r '.[]' evidence/registry-after/subjects.json | while read -r subject; do
             encoded_subject="$(jq -rn --arg subject "$subject" '$subject|@uri')"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-after/$subject.versions.json"
-            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-after/$subject.schema.json"
+            subject_key="$(printf '%s' "$subject" | sha256sum | cut -d ' ' -f1)"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions" | jq -S . > "evidence/registry-after/$subject_key.versions.json"
+            curl --fail --silent "$SCHEMA_REGISTRY_URL/subjects/$encoded_subject/versions/latest" | jq -S '{id,version,schemaType}' > "evidence/registry-after/$subject_key.schema.json"
           done
           diff -ru evidence/registry-before evidence/registry-after
 
@@ -296,11 +399,15 @@ jobs:
           set -euo pipefail
           mkdir -p evidence
           status="${{ job.status }}"
+          java_external_resolution="${{ steps.java_external_resolution.outcome }}"
+          go_external_resolution="${{ steps.go_external_resolution.outcome }}"
           java_to_go="${{ steps.java_to_go.outcome }}"
           go_to_java="${{ steps.go_to_java.outcome }}"
           delivery_failures="${{ steps.delivery_failures.outcome }}"
           registry_check="${{ steps.registry_immutable.outcome }}"
           registry_mutation="not-checked"
+          [[ "$java_external_resolution" == "success" ]] && java_external_resolution="pass"
+          [[ "$go_external_resolution" == "success" ]] && go_external_resolution="pass"
           [[ "$java_to_go" == "success" ]] && java_to_go="pass"
           [[ "$go_to_java" == "success" ]] && go_to_java="pass"
           [[ "$delivery_failures" == "success" ]] && delivery_failures="pass"
@@ -311,6 +418,7 @@ jobs:
             --arg commonJava "$COMMON_JAVA_VERSION" --arg commonJavaRef "$COMMON_JAVA_REF" --arg commonJavaSha "$COMMON_JAVA_SHA" \
             --arg commonGo "$COMMON_GO_VERSION" --arg commonGoRef "$COMMON_GO_REF" --arg commonGoSha "$COMMON_GO_SHA" \
             --arg fixtureSha256 "$FIXTURE_SHA256" --arg status "$status" \
+            --arg javaExternalResolution "$java_external_resolution" --arg goExternalResolution "$go_external_resolution" \
             --arg javaToGo "$java_to_go" --arg goToJava "$go_to_java" \
             --arg deliveryFailures "$delivery_failures" --arg registryMutation "$registry_mutation" \
             --arg runUrl "https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
@@ -319,8 +427,9 @@ jobs:
               commonJava:$commonJava,commonJavaCandidateRef:$commonJavaRef,commonJavaSha:$commonJavaSha,
               commonGo:$commonGo,commonGoCandidateRef:$commonGoRef,commonGoSha:$commonGoSha,
               kafka:"confluentinc/cp-kafka:7.7.1",schemaRegistry:"confluentinc/cp-schema-registry:7.7.1",
-              fixtureSha256:$fixtureSha256,fixtureCases:9,status:$status,javaToGo:$javaToGo,goToJava:$goToJava,
-              retryCommitDlq:$deliveryFailures,registryMutation:$registryMutation,
+              fixtureSha256:$fixtureSha256,fixtureCases:11,status:$status,
+              javaExternalResolution:$javaExternalResolution,goExternalResolution:$goExternalResolution,
+              javaToGo:$javaToGo,goToJava:$goToJava,retryCommitDlq:$deliveryFailures,registryMutation:$registryMutation,
               workflowRunUrl:$runUrl,workflowRunId:$runId,workflowRunAttempt:$runAttempt,ownerApproval:"pending"}' \
             > evidence/cross-language-matrix.json
           jq -n \

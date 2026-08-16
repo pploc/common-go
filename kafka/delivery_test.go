@@ -7,9 +7,7 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-
 )
-
 
 func validUserRegisteredFrame() []byte {
 	payload, err := proto.Marshal(validUserRegisteredEvent())

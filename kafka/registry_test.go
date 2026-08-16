@@ -37,6 +37,7 @@ func TestGivenRegistry_WhenResolvingFrozenAndUnknownTopics_ThenReturnsExpectedCo
 
 	// When
 	message, resolveErr := registry.Resolve("identity.user.registered.v1", 0, nil)
+	checkInMessage, checkInResolveErr := registry.Resolve("checkin.recorded.v1", 0, nil)
 	_, unknownErr := registry.Resolve("unknown.topic.v1", 0, nil)
 
 	// Then
@@ -45,6 +46,12 @@ func TestGivenRegistry_WhenResolvingFrozenAndUnknownTopics_ThenReturnsExpectedCo
 	}
 	if _, ok := message.(*eventsv1.UserRegisteredEvent); !ok {
 		t.Fatalf("resolved message = %T, want *eventsv1.UserRegisteredEvent", message)
+	}
+	if checkInResolveErr != nil {
+		t.Fatalf("resolve Check-in topic: %v", checkInResolveErr)
+	}
+	if _, ok := checkInMessage.(*eventsv1.CheckInRecordedEvent); !ok {
+		t.Fatalf("resolved Check-in message = %T, want *eventsv1.CheckInRecordedEvent", checkInMessage)
 	}
 	if unknownErr == nil || !IsPermanent(unknownErr) {
 		t.Fatalf("unknown topic error = %v, want permanent error", unknownErr)

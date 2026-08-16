@@ -40,16 +40,9 @@ func TestPublishedProtoGoConfluentFixtures(t *testing.T) {
 	if document.FixtureFormatVersion != 1 {
 		t.Fatalf("fixture format version = %d, want 1", document.FixtureFormatVersion)
 	}
-	if len(document.Cases) == 0 {
-		t.Fatal("published fixture artifact contains no cases")
+	if len(document.Cases) != 11 {
+		t.Fatalf("fixture cases = %d, want 11", len(document.Cases))
 	}
-	// Enum-break v4 topics use .v2. Committed fixtures still on .v1 until Registry regenerate.
-	for _, fixture := range document.Cases {
-		if fixture.Name == "user-registered" && fixture.Topic == "identity.user.registered.v1" {
-			t.Skip("confluent fixtures still pre-v4; regenerate against Schema Registry after gym-proto publish")
-		}
-	}
-
 	for _, fixture := range document.Cases {
 		fixture := fixture
 		t.Run(fixture.Name, func(t *testing.T) {
@@ -149,6 +142,8 @@ func fixtureMessage(t *testing.T, eventType string) proto.Message {
 		return &eventsv1.UserSuspendedEvent{}
 	case "events.v1.UserRoleChangedEvent":
 		return &eventsv1.UserRoleChangedEvent{}
+	case "events.v1.EmailVerificationRequestedEvent":
+		return &eventsv1.EmailVerificationRequestedEvent{}
 	case "events.v1.PaymentCompletedEvent":
 		return &eventsv1.PaymentCompletedEvent{}
 	case "events.v1.MembershipActivatedEvent":
@@ -161,6 +156,8 @@ func fixtureMessage(t *testing.T, eventType string) proto.Message {
 		return &eventsv1.MembershipExpiringSoonEvent{}
 	case "events.v1.MembershipExpiredEvent":
 		return &eventsv1.MembershipExpiredEvent{}
+	case "events.v1.CheckInRecordedEvent":
+		return &eventsv1.CheckInRecordedEvent{}
 	default:
 		t.Fatalf("unsupported fixture event type %q", eventType)
 		return nil

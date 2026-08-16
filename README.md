@@ -4,7 +4,7 @@ Shared Go foundations for Gym microservices.
 
 ## Status
 
-`develop` is an unreleased G2 source line; no `common-go` release tag exists. It pins the published `github.com/pploc/proto-go v1.1.0` contract without a `replace` directive.
+Published stable line is `v0.4.0`. `develop` prepares the `v0.5.0` contract line and pins published `github.com/pploc/proto-go v1.7.1` without a `replace` directive.
 
 ## Packages
 
@@ -28,7 +28,7 @@ go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
 make verify
 ```
 
-For Kafka/Registry validation, use the reusable repository workflow. It provisions Confluent Kafka and Schema Registry 7.7.1, verifies the immutable `gym-proto v1.1.0` fixture input, and runs:
+For Kafka/Registry validation, use the reusable repository workflow. It provisions Confluent Kafka and Schema Registry 7.7.1, verifies all eleven immutable `gym-proto v7.0.2` fixtures, and runs:
 
 ```bash
 KAFKA_BROKERS=localhost:9092 SCHEMA_REGISTRY_URL=http://localhost:8081 make integration

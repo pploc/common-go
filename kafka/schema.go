@@ -64,6 +64,7 @@ var frozenTopicTypes = map[string]string{
 	"membership.resumed.v1":                    "events.v1.MembershipResumedEvent",
 	"membership.expiring-soon.v1":              "events.v1.MembershipExpiringSoonEvent",
 	"membership.expired.v1":                    "events.v1.MembershipExpiredEvent",
+	"checkin.recorded.v1":                      "events.v1.CheckInRecordedEvent",
 }
 
 func validateFrozenPair(topic string, message proto.Message) error {
@@ -92,4 +93,3 @@ func validateMessage(message proto.Message) error {
 	}
 	return nil
 }
-

@@ -30,13 +30,14 @@ func TestGivenFrozenTopicTypePairs_WhenValidatingMessages_ThenAcceptsOnlyMatchin
 		{"identity.user.registered.v1", &eventsv1.UserRegisteredEvent{}},
 		{"identity.user.suspended.v1", &eventsv1.UserSuspendedEvent{}},
 		{"identity.user.role-changed.v1", &eventsv1.UserRoleChangedEvent{}},
-			{"identity.email.verification-requested.v1", &eventsv1.EmailVerificationRequestedEvent{}},
+		{"identity.email.verification-requested.v1", &eventsv1.EmailVerificationRequestedEvent{}},
 		{"payment.completed.v1", &eventsv1.PaymentCompletedEvent{}},
 		{"membership.activated.v1", &eventsv1.MembershipActivatedEvent{}},
 		{"membership.paused.v1", &eventsv1.MembershipPausedEvent{}},
 		{"membership.resumed.v1", &eventsv1.MembershipResumedEvent{}},
 		{"membership.expiring-soon.v1", &eventsv1.MembershipExpiringSoonEvent{}},
 		{"membership.expired.v1", &eventsv1.MembershipExpiredEvent{}},
+		{"checkin.recorded.v1", &eventsv1.CheckInRecordedEvent{}},
 	}
 
 	for _, test := range tests {
